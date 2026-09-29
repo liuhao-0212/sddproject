@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
+import collector._lark as lark_common
 import collector.lark_task as lark
 
 BASE_TIME = datetime(2026, 9, 29, 0, 0)
@@ -54,7 +55,7 @@ def install(monkeypatch, handler, record_sleep=False, with_creds=True):
         monkeypatch.setenv("LARK_APP_SECRET", "sec_test")
     monkeypatch.setattr(lark, "_get_client",
                         lambda: httpx.Client(transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(lark, "_sleep", sleeps.append if record_sleep else (lambda s: None))
+    monkeypatch.setattr(lark_common, "_sleep", sleeps.append if record_sleep else (lambda s: None))
     return sleeps
 
 
@@ -256,8 +257,8 @@ def test_timeout_retries_three_times_then_returns_empty(monkeypatch, caplog):
         records = lark.collect("proj-001", BASE_TIME, END_TIME)
 
     assert records == []
-    assert len(list_attempts) == 1 + lark.MAX_RETRIES
-    assert sleeps == [lark.RETRY_INTERVAL] * lark.MAX_RETRIES
+    assert len(list_attempts) == 1 + lark_common.MAX_RETRIES
+    assert sleeps == [lark_common.RETRY_INTERVAL] * lark_common.MAX_RETRIES
     assert "飞书任务数据源采集失败" in caplog.text
 
 
