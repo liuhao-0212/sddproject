@@ -29,12 +29,12 @@
 依赖: Task 1
 
 验收标准:
-- [ ] config.py 能读取 config.yaml 并返回配置对象
-- [ ] config.py 在配置缺少必填字段时抛出明确的错误信息
-- [ ] logger.py 输出 JSON lines 格式日志
-- [ ] errors.py 定义 CollectorError、GeneratorError、NotifierError 三个自定义异常
-- [ ] storage.py 能创建 SQLite，写入和查询日报记录
-- [ ] 所有模块包含对应的单元测试，测试通过
+- [x] config.py 能读取 config.yaml 并返回配置对象
+- [x] config.py 在配置缺少必填字段时抛出明确的错误信息
+- [x] logger.py 输出 JSON lines 格式日志
+- [x] errors.py 定义 CollectorError、GeneratorError、NotifierError 三个自定义异常
+- [x] storage.py 能创建 SQLite，写入和查询日报记录
+- [x] 所有模块包含对应的单元测试，测试通过
 
 ---
 
