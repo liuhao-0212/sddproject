@@ -92,13 +92,13 @@
 依赖: Task 2
 
 验收标准:
-- [ ] generate() 函数签名符合 design.md §4.2 的接口定义
-- [ ] 输出的 DailyReport.markdown 包含三个部分标题
-- [ ] 输出的 DailyReport.html 可被浏览器正确渲染
-- [ ] 若某成员当日无任何记录，日报中需要显示“今日无记录”
-- [ ] 若某数据源采集失败，日报中需要标注“数据获取失败”
-- [ ] Markdown 到 HTML 的转换格式正确
-- [ ] 使用 Mock 数据的单元测试全部通过
+- [x] generate() 函数签名符合 design.md §4.2 的接口定义
+- [x] 输出的 DailyReport.markdown 包含三个部分标题
+- [x] 输出的 DailyReport.html 可被浏览器正确渲染
+- [x] 若某成员当日无任何记录，日报中需要显示“今日无记录”
+- [x] 若某数据源采集失败，日报中需要标注“数据获取失败”
+- [x] Markdown 到 HTML 的转换格式正确
+- [x] 使用 Mock 数据的单元测试全部通过
 
 ---
 

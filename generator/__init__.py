@@ -1,2 +1,5 @@
 """生成层：将原始数据组织为日报（数据整理 + Markdown 生成、日报模板管理）。"""
 
+from generator.formatter import DailyReport, MemberReport, generate
+
+__all__ = ["DailyReport", "MemberReport", "generate"]

@@ -56,6 +56,7 @@ MemberReport（成员报告）
 - commits: list[CommitRecord]  # 代码提交记录
 - tasks: list[TaskRecord]      # 任务变更记录
 - messages: list[MessageRecord] # 相关消息记录
+- source_errors: dict[str, str] # 数据源失败标注（数据源 key → 原因），由编排层填入
 
 ### 3.3 成员身份映射（config.yaml）
 GitHub 用户名与飞书用户名需通过映射表关联：

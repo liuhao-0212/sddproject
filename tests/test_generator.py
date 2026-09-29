@@ -1,0 +1,147 @@
+"""generator 单元测试（使用 Mock 数据）。"""
+
+from datetime import date, datetime, timezone
+
+from collector.github import CommitRecord
+from collector.lark_msg import MessageRecord
+from collector.lark_task import TaskRecord
+from generator import DailyReport, MemberReport, generate
+
+REPORT_DATE = date(2026, 9, 29)
+TZ = timezone.utc
+
+
+def make_member(**overrides):
+    defaults = dict(
+        name="张三",
+        github_username="zhangsan",
+        commits=[CommitRecord(author="zhangsan", message="feat: 登录页",
+                              timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ),
+                              repo="org/repo", additions=10, deletions=3,
+                              files_changed=2)],
+        tasks=[TaskRecord(assignee="张三", title="实现登录页", status_from="未开始",
+                          status_to="进行中",
+                          updated_at=datetime(2026, 9, 29, 10, 0, tzinfo=TZ))],
+        messages=[MessageRecord(sender="张三", content="评审文档已上传",
+                                timestamp=datetime(2026, 9, 29, 10, 5, tzinfo=TZ),
+                                chat_name="团队群")],
+    )
+    defaults.update(overrides)
+    return MemberReport(**defaults)
+
+
+def test_generate_returns_dailyreport_with_all_fields():
+    member = make_member()
+    report = generate([member], REPORT_DATE, "研发一组")
+
+    assert isinstance(report, DailyReport)
+    assert report.date == REPORT_DATE
+    assert report.team_name == "研发一组"
+    assert report.members == [member]
+    assert isinstance(report.generated_at, datetime)
+    assert isinstance(report.markdown, str) and report.markdown
+    assert isinstance(report.html, str) and report.html
+
+
+def test_markdown_contains_three_section_titles():
+    report = generate([make_member()], REPORT_DATE, "研发一组")
+    markdown = report.markdown
+
+    assert "# 研发一组 日报（2026-09-29）" in markdown
+    assert "## 张三" in markdown
+    assert "GitHub 用户名: zhangsan" in markdown
+    assert "### 代码提交" in markdown
+    assert "### 任务进展" in markdown
+    assert "### 协作沟通" in markdown
+
+
+def test_markdown_renders_commits_with_stats():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+    assert "[org/repo] feat: 登录页（+10/-3，2 个文件）— 08:30" in markdown
+
+
+def test_markdown_renders_tasks():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+    assert "实现登录页：未开始 → 进行中（10:00）" in markdown
+
+
+def test_markdown_renders_messages():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+    assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
+
+
+def test_multiline_commit_message_collapsed_to_single_line():
+    member = make_member(commits=[CommitRecord(
+        author="zhangsan", message="line1\nline2",
+        timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ), repo="org/repo")])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+    assert "line1 line2" in markdown
+
+
+def test_empty_member_shows_no_records_today():
+    member = make_member(commits=[], tasks=[], messages=[])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.count("今日无记录") == 3  # 三个板块各一条
+
+
+def test_source_failure_annotated_in_markdown():
+    member = make_member(source_errors={"github": "超时"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "数据获取失败" in markdown
+    assert "GitHub采集异常：超时" in markdown
+    # 其他数据源正常渲染
+    assert "实现登录页：未开始 → 进行中（10:00）" in markdown
+
+
+def test_source_failure_without_reason():
+    member = make_member(source_errors={"lark_msg": ""})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+    assert "**数据获取失败**（飞书消息采集异常）" in markdown
+
+
+def test_all_sources_failed():
+    member = make_member(source_errors={"github": "a", "lark_task": "b", "lark_msg": "c"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.count("数据获取失败") == 3
+    assert "今日无记录" not in markdown
+
+
+def test_multiple_members_each_have_sections():
+    markdown = generate([make_member(), make_member(name="李四", github_username="lisi",
+                                                    commits=[], tasks=[], messages=[])],
+                        REPORT_DATE, "研发一组").markdown
+    assert "## 张三" in markdown
+    assert "## 李四" in markdown
+    assert markdown.count("### 代码提交") == 2
+    assert "今日无记录" in markdown
+
+
+def test_html_wellformed_and_renders_sections():
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert html.startswith("<!DOCTYPE html>")
+    assert "<h1>研发一组 日报（2026-09-29）</h1>" in html
+    assert "<title>研发一组 日报（2026-09-29）</title>" in html
+    assert "<h2>张三</h2>" in html
+    assert "<h3>代码提交</h3>" in html
+    assert "<ul>" in html and "<li>" in html
+
+
+def test_html_escapes_injected_content():
+    member = make_member(commits=[CommitRecord(
+        author="zhangsan", message="<script>alert(1)</script>",
+        timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ), repo="org/repo")])
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert "&lt;script&gt;" in html
+    assert "<script>" not in html
+
+
+def test_html_renders_failure_annotation():
+    member = make_member(source_errors={"github": "超时"})
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert "<strong>数据获取失败</strong>（GitHub采集异常：超时）" in html
