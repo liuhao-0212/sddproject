@@ -40,6 +40,15 @@ from shared.logger import get_logger
 
 logger = get_logger("collector.lark_task")
 
+# 最近一次 collect() 的失败原因；编排层据此区分“数据源失败”与“数据源为空”（design.md §6.1）
+_last_error: str | None = None
+
+
+def get_last_error() -> str | None:
+    """返回最近一次 collect() 的失败原因，无失败时为 None。"""
+    return _last_error
+
+
 TASK_LIST_URL = f"{BASE_URL}/task/v1/tasks"
 
 
@@ -59,11 +68,14 @@ def collect(project_id: str, since: datetime, until: datetime) -> list[TaskRecor
 
     采集失败返回空列表并记录错误日志（由生成层在日报中标注"数据获取失败"）。
     """
+    global _last_error
+    _last_error = None
     client = _get_client()
     try:
         try:
             return _collect_inner(client, project_id, since, until)
         except CollectorError as exc:
+            _last_error = str(exc)
             logger.error("飞书任务数据源采集失败，返回空列表",
                          extra={"project_id": project_id, "reason": str(exc)}, exc_info=exc)
             return []

@@ -287,6 +287,30 @@ def test_message_with_sensitive_from_config_excluded(tmp_path, monkeypatch):
 
 # ---------- 错误处理（design.md §6.1） ----------
 
+def test_last_error_set_on_failure_and_cleared_on_success(monkeypatch):
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        if request.url.path == CHAT_PATH:
+            return chat_response()
+        raise httpx.ConnectTimeout("timeout", request=request)
+
+    install(monkeypatch, failing_handler)
+    assert lark_msg.collect("oc_test", KEYWORDS, BASE_TIME, END_TIME) == []
+    assert lark_msg.get_last_error() is not None
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        if request.url.path == CHAT_PATH:
+            return chat_response()
+        return messages_response([])
+
+    install(monkeypatch, ok_handler)
+    lark_msg.collect("oc_test", KEYWORDS, BASE_TIME, END_TIME)
+    assert lark_msg.get_last_error() is None
+
+
 def test_token_expired_refreshes_and_retries_once(monkeypatch):
     token_calls: list = []
     msg_auth: list = []

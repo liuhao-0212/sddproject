@@ -279,6 +279,22 @@ def test_detail_failure_keeps_commit_with_zero_stats(monkeypatch, caplog):
 
 # ---------- 客户端构造 ----------
 
+def test_last_error_set_on_failure_and_cleared_on_success(monkeypatch):
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timeout", request=request)
+
+    install(monkeypatch, failing_handler)
+    assert github.collect(["org/repo"], BASE_TIME, END_TIME) == []
+    assert github.get_last_error() is not None
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    install(monkeypatch, ok_handler)
+    github.collect(["org/repo"], BASE_TIME, END_TIME)
+    assert github.get_last_error() is None
+
+
 def test_get_client_uses_token_from_env(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
     client = github._get_client()

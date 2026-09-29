@@ -37,6 +37,14 @@ DEFAULT_RATE_LIMIT_WAIT = 60.0
 # 模块级别名，便于测试中替换，避免影响全局 time 模块
 _sleep = time.sleep
 
+# 最近一次 collect() 的失败原因；编排层据此区分“数据源失败”与“数据源为空”（design.md §6.1）
+_last_error: str | None = None
+
+
+def get_last_error() -> str | None:
+    """返回最近一次 collect() 的失败原因，无失败时为 None。"""
+    return _last_error
+
 
 @dataclass
 class CommitRecord:
@@ -56,6 +64,8 @@ def collect(repos: list[str], since: datetime, until: datetime) -> list[CommitRe
 
     单个仓库采集失败不影响其他仓库；失败的仓库返回空列表并记录错误日志。
     """
+    global _last_error
+    _last_error = None
     records: list[CommitRecord] = []
     client = _get_client()
     try:
@@ -81,9 +91,11 @@ def _get_client() -> httpx.Client:
 
 def _collect_repo(client: httpx.Client, repo: str, since: datetime, until: datetime) -> list[CommitRecord]:
     """采集单个仓库的 Commit 记录；失败时记录错误日志并返回空列表。"""
+    global _last_error
     try:
         raw_commits = _fetch_commits(client, repo, since, until)
     except CollectorError as exc:
+        _last_error = str(exc)
         logger.error("github 数据源采集失败，返回空列表",
                      extra={"repo": repo, "reason": str(exc)}, exc_info=exc)
         return []

@@ -301,6 +301,26 @@ def test_nonzero_business_code_fails_without_token_retry(monkeypatch, caplog):
     assert "飞书任务数据源采集失败" in caplog.text
 
 
+def test_last_error_set_on_failure_and_cleared_on_success(monkeypatch):
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        raise httpx.ConnectTimeout("timeout", request=request)
+
+    install(monkeypatch, failing_handler)
+    assert lark.collect("proj-001", BASE_TIME, END_TIME) == []
+    assert lark.get_last_error() is not None
+
+    def ok_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        return tasks_response([])
+
+    install(monkeypatch, ok_handler)
+    lark.collect("proj-001", BASE_TIME, END_TIME)
+    assert lark.get_last_error() is None
+
+
 def test_missing_credentials_returns_empty(monkeypatch, caplog):
     def handler(request: httpx.Request) -> httpx.Response:
         return token_response()  # 凭据缺失时应提前失败，不会发起任何请求

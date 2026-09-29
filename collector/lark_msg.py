@@ -46,6 +46,15 @@ from shared.logger import get_logger
 
 logger = get_logger("collector.lark_msg")
 
+# 最近一次 collect() 的失败原因；编排层据此区分“数据源失败”与“数据源为空”（design.md §6.1）
+_last_error: str | None = None
+
+
+def get_last_error() -> str | None:
+    """返回最近一次 collect() 的失败原因，无失败时为 None。"""
+    return _last_error
+
+
 CHAT_URL = f"{BASE_URL}/im/v1/chats"
 MESSAGE_LIST_URL = f"{BASE_URL}/im/v1/messages"
 # 配置读取路径（测试中可替换）
@@ -70,11 +79,14 @@ def collect(chat_id: str, keywords: list[str], since: datetime,
 
     采集失败返回空列表并记录错误日志（由生成层在日报中标注"数据获取失败"）。
     """
+    global _last_error
+    _last_error = None
     client = _get_client()
     try:
         try:
             return _collect_inner(client, chat_id, keywords, since, until)
         except CollectorError as exc:
+            _last_error = str(exc)
             logger.error("飞书消息数据源采集失败，返回空列表",
                          extra={"chat_id": chat_id, "reason": str(exc)}, exc_info=exc)
             return []
