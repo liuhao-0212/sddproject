@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 环境变量与密钥（design.md §6.2：.env 必须被忽略）
+.env
+
+# 本地配置文件（从 config.yaml.example 复制生成）
+config.yaml
+
+# 运行时数据
+data/
+output/
+*.db

@@ -1,0 +1,52 @@
+# 智能日报生成器 — 配置文件模板
+# 使用方法：复制本文件为 config.yaml，按实际情况填写后生效（下次执行自动读取，无需重启）
+#
+# 安全约束（specs/design.md §6.2）：
+#   API 密钥等敏感信息一律通过环境变量注入（如 GITHUB_TOKEN、LARK_APP_ID 等），
+#   严禁写入本文件；.env 已加入 .gitignore。
+
+# 团队名称：用于日报标题与邮件主题
+team_name: "研发一组"
+
+# 成员身份映射表：将 GitHub 用户名与飞书用户名关联（design.md §3.3）
+members:
+  - name: "张三"
+    github: "zhangsan"
+    lark: "zhangsan@company.com"
+  - name: "李四"
+    github: "lisi-dev"
+    lark: "lisi@company.com"
+  - name: "王五"
+    github: "wangwu"
+    lark: "wangwu@company.com"
+
+# 采集层配置
+collector:
+  github:
+    # 仅采集此处明确列出的仓库（design.md §6.2 访问控制）
+    repos:
+      - "org/repo-a"
+      - "org/repo-b"
+  lark_task:
+    project_id: "your-lark-project-id"
+  lark_msg:
+    chat_id: "oc_xxxxxxxx"
+    # 项目强相关讨论的关键词过滤器
+    keywords: ["上线", "发布", "评审", "联调"]
+    # 敏感关键词黑名单：命中的消息不进入日报（design.md §6.2）
+    sensitive_keywords: ["薪资", "绩效", "裁员"]
+
+# 推送层配置
+notifier:
+  email:
+    smtp_host: "smtp.company.com"
+    smtp_port: 465
+    recipients:
+      - "leader@company.com"
+  lark_bot:
+    # 建议通过环境变量 LARK_BOT_WEBHOOK_URL 注入，避免密钥落入配置文件
+    webhook_url: ""
+
+# 本地存储（design.md ADR-002：SQLite，仅存日报历史）
+storage:
+  db_path: "data/report.db"
