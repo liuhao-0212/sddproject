@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 
 from collector.github import CommitRecord
+from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
 from generator import DailyReport, MemberReport, generate
@@ -25,9 +26,23 @@ def make_member(**overrides):
         messages=[MessageRecord(sender="张三", content="评审文档已上传",
                                 timestamp=datetime(2026, 9, 29, 10, 5, tzinfo=TZ),
                                 chat_name="团队群")],
+        attendance=None,
     )
     defaults.update(overrides)
     return MemberReport(**defaults)
+
+
+def make_attendance(**overrides):
+    defaults = dict(
+        employee_id="zhangsan@company.com",
+        date=REPORT_DATE,
+        check_in=datetime(2026, 9, 29, 9, 0, tzinfo=TZ),
+        check_out=datetime(2026, 9, 29, 18, 0, tzinfo=TZ),
+        work_hours=9.0,
+        status="正常",
+    )
+    defaults.update(overrides)
+    return AttendanceRecord(**defaults)
 
 
 def test_generate_returns_dailyreport_with_all_fields():
@@ -145,3 +160,63 @@ def test_html_renders_failure_annotation():
     html = generate([member], REPORT_DATE, "研发一组").html
 
     assert "<strong>数据获取失败</strong>（GitHub采集异常：超时）" in html
+
+
+# ---------- v1.1：工时统计板块 ----------
+
+def test_attendance_section_between_tasks_and_messages():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.index("### 任务进展") < markdown.index("### 工时统计") \
+        < markdown.index("### 协作沟通")
+
+
+def test_attendance_renders_work_hours_and_status():
+    member = make_member(attendance=make_attendance())
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "### 工时统计" in markdown
+    assert "签到 09:00 / 签退 18:00，工时 9 小时（正常）" in markdown
+
+
+def test_attendance_late_status_rendered():
+    member = make_member(attendance=make_attendance(
+        check_in=datetime(2026, 9, 29, 9, 30, tzinfo=TZ), work_hours=8.5, status="迟到"))
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "签到 09:30 / 签退 18:00，工时 8.5 小时（迟到）" in markdown
+
+
+def test_attendance_missing_check_out_rendered():
+    member = make_member(attendance=make_attendance(check_out=None, work_hours=0.0,
+                                                     status="签退缺失"))
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "签到 09:00 / 签退缺失" in markdown
+
+
+def test_attendance_absent_without_punches_rendered():
+    member = make_member(attendance=make_attendance(check_in=None, check_out=None,
+                                                     work_hours=0.0, status="缺勤"))
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- 缺勤" in markdown
+
+
+def test_attendance_unavailable_when_none():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "考勤数据暂不可用" in markdown
+
+
+def test_attendance_unavailable_rendered_in_html():
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert "考勤数据暂不可用" in html
+
+
+def test_attendance_unavailable_does_not_count_as_no_records():
+    member = make_member(commits=[], tasks=[], messages=[])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.count("今日无记录") == 3  # 三个板块各一条；工时统计显示"考勤数据暂不可用"

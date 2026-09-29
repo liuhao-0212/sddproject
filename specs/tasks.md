@@ -2,7 +2,7 @@
 
 ## 元信息
 - 关联规范: specs/proposal.md、specs/design.md
-- 任务总数: 10
+- 任务总数: 11
 - 预计总执行时间: 3 到 4h（包含测试）
 - 执行策略: 按依赖关系顺序执行，独立任务可并行执行
 
@@ -86,10 +86,10 @@
 ---
 
 ## Task 6: 实现日报生成模块
-描述: 接收各成员的采集数据，按“代码提交→任务进展→协作沟通”组织日报内容，输出 Markdown 和 HTML 格式文件
+描述: 接收各成员的采集数据，按“代码提交→任务进展→工时统计→协作沟通”组织日报内容，输出 Markdown 和 HTML 格式文件
 输入: design.md §3（MemberReport、DailyReport 数据模型）、design.md §4.2（生成层接口契约）
 输出: generator/formatter.py、generator/template.py + tests/test_generator.py
-依赖: Task 2
+依赖: Task 2、Task 11
 
 验收标准:
 - [x] generate() 函数签名符合 design.md §4.2 的接口定义
@@ -99,6 +99,9 @@
 - [x] 若某数据源采集失败，日报中需要标注“数据获取失败”
 - [x] Markdown 到 HTML 的转换格式正确
 - [x] 使用 Mock 数据的单元测试全部通过
+- [x] 日报内容必须包含每位团队成员的工时统计（v1.1 新增）
+- [x] 当考勤数据不可用时，界面需要显示“考勤数据暂不可用”（v1.1 新增）
+- [x] 布局顺序调整：工时统计模块应位于“任务进展”之后、“协作沟通”之前（v1.1 新增）
 
 ---
 
@@ -162,11 +165,27 @@
 
 ---
 
+---
+
+## Task 11: 实现考勤数据采集模块（新增 v1.1）
+描述: 对接飞书考勤 API，获取团队成员的签到与签退数据
+输入: design.md §3（AttendanceRecord 数据模型）、design.md §4.1（采集层接口契约）
+输出: collector/lark_attendance.py + tests/test_attendance.py
+依赖: Task 2（共享基础层）
+
+验收标准:
+- [x] collect() 函数签名严格符合 design.md 的接口定义
+- [x] 返回 CollectResult 对象（包含 success 标志位）
+- [x] 逻辑正确计算工时（check_out - check_in）
+- [x] 妥善处理缺失签退数据的情况（状态标注为“签退缺失”）
+- [x] 当 API 不可用时，success 置为 False 并附带详细错误信息
+- [x] 基于 Mock 数据的单元测试全部通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）
-阶段 3: Task 3 + Task 4 + Task 5 并行（三个采集模块）
-阶段 4: Task 6（日报生成模块）
+阶段 3: Task 3 + Task 4 + Task 5 + Task 11 并行（采集模块）
+阶段 4: Task 6（日报生成模块，含 v1.1 工时展示）
 阶段 5: Task 7 + Task 8 并行（两个推送模块）
 阶段 6: Task 9（主编排入口）
 阶段 7: Task 10（集成测试）

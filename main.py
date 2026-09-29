@@ -6,9 +6,10 @@
     python main.py --dry-run  # 采集 + 生成，不推送、不落库
 
 错误处理（design.md §6.1）:
-- 单个数据源失败不阻断其他数据源；失败源经 collect 模块的 get_last_error()
-  探测（区分“失败”与“为空”），填入 MemberReport.source_errors，
-  由生成层在日报中标注“数据获取失败”
+- 单个数据源失败不阻断其他数据源；github/lark_task/lark_msg 经 get_last_error()
+  探测（区分“失败”与“为空”），考勤经 CollectResult.success 探测（ADR-003），
+  失败原因填入 MemberReport.source_errors，由生成层在日报中标注
+  “数据获取失败”/“考勤数据暂不可用”
 - 所有数据源失败时不生成空日报，记录错误日志并发送告警邮件
 - 推送渠道互为备份告警通道：邮件失败经飞书告警，飞书失败经邮件告警
 """
@@ -20,8 +21,10 @@ import sys
 from datetime import date, datetime, time, timedelta
 
 import collector.github as github
+import collector.lark_attendance as lark_attendance
 import collector.lark_msg as lark_msg
 import collector.lark_task as lark_task
+from collector.lark_attendance import AttendanceRecord
 from generator import DailyReport, MemberReport, generate
 from notifier import email as email_notifier
 from notifier import lark_bot as lark_bot_notifier
@@ -69,7 +72,7 @@ def _run(dry_run: bool) -> int:
     since = datetime.combine(today, time.min)  # 采集窗口：当日 00:00 至执行时刻（proposal §4）
     until = datetime.now()
 
-    # 1) 采集：三个数据源相互独立，单源失败不阻断其他源
+    # 1) 采集：四个数据源相互独立，单源失败不阻断其他源
     commits = github.collect(cfg["collector"]["github"]["repos"], since, until)
     logger.info("数据源采集完成", extra={"source": "github", "count": len(commits)})
     tasks = lark_task.collect(cfg["collector"]["lark_task"]["project_id"], since, until)
@@ -77,11 +80,20 @@ def _run(dry_run: bool) -> int:
     messages = lark_msg.collect(cfg["collector"]["lark_msg"]["chat_id"],
                                 cfg["collector"]["lark_msg"]["keywords"], since, until)
     logger.info("数据源采集完成", extra={"source": "lark_msg", "count": len(messages)})
+    # 考勤（v1.1）：失败经 CollectResult.error 显式返回（ADR-003），异常不得吞掉
+    attendance_result = lark_attendance.collect(today, today)
+    if attendance_result.success:
+        logger.info("数据源采集完成",
+                    extra={"source": "lark_attendance", "count": len(attendance_result.data)})
+    else:
+        logger.error("飞书考勤采集失败，日报将标注“考勤数据暂不可用”",
+                     extra={"reason": attendance_result.error})
 
     source_errors = {
         "github": github.get_last_error(),
         "lark_task": lark_task.get_last_error(),
         "lark_msg": lark_msg.get_last_error(),
+        "lark_attendance": None if attendance_result.success else attendance_result.error,
     }
 
     # 2) 所有数据源均不可用：不生成空日报，记录错误日志 + 告警邮件（§6.1）
@@ -92,7 +104,8 @@ def _run(dry_run: bool) -> int:
         return 1
 
     # 3) 聚合为成员报告（§3.3 成员身份映射）
-    members = _aggregate(cfg, commits, tasks, messages, source_errors)
+    members = _aggregate(cfg, commits, tasks, messages,
+                         attendance_result.data, source_errors)
 
     # 4) 生成日报
     report = generate(members, today, cfg["team_name"])
@@ -148,6 +161,10 @@ def check() -> int:
     results["lark_msg"] = lark_msg.get_last_error() is None
     _log_probe("飞书消息 API", results["lark_msg"], lark_msg.get_last_error())
 
+    attendance_result = lark_attendance.collect(probe_since.date(), now.date())
+    results["lark_attendance"] = attendance_result.success
+    _log_probe("飞书考勤 API", attendance_result.success, attendance_result.error)
+
     results["email"] = _probe_smtp(cfg["notifier"]["email"])
     try:
         lark_bot_notifier._webhook_url()
@@ -167,14 +184,19 @@ def check() -> int:
 
 
 def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
+               attendance: list[AttendanceRecord],
                source_errors: dict) -> list[MemberReport]:
-    """按 config 的 members 映射表把三类记录聚合成成员报告（design.md §3.3）。
+    """按 config 的 members 映射表把各类记录聚合成成员报告（design.md §3.3）。
 
-    GitHub 记录按 github 用户名匹配；飞书记录按 lark 用户名或成员姓名匹配。
+    GitHub 记录按 github 用户名匹配；飞书记录按 lark 用户名或成员姓名匹配；
+    考勤记录按 employee_id 与 lark 用户名匹配。
     未映射到任何成员的记录跳过并记录告警（不静默丢弃）。
     """
     reports: list[MemberReport] = []
-    assigned_commits = assigned_tasks = assigned_messages = 0
+    assigned_commits = assigned_tasks = assigned_messages = assigned_attendance = 0
+    attendance_by_employee: dict[str, AttendanceRecord] = {}
+    for record in attendance:
+        attendance_by_employee[record.employee_id] = record  # 同员工多条取最后一条
     for member_cfg in cfg["members"]:
         name = str(member_cfg.get("name") or "")
         github_name = str(member_cfg.get("github") or "")
@@ -182,9 +204,11 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
         member_commits = [c for c in commits if github_name and c.author == github_name]
         member_tasks = [t for t in tasks if _matches(t.assignee, lark_name, name)]
         member_messages = [m for m in messages if _matches(m.sender, lark_name, name)]
+        member_attendance = attendance_by_employee.get(lark_name) if lark_name else None
         assigned_commits += len(member_commits)
         assigned_tasks += len(member_tasks)
         assigned_messages += len(member_messages)
+        assigned_attendance += 1 if member_attendance is not None else 0
         reports.append(MemberReport(
             name=name,
             github_username=github_name,
@@ -192,6 +216,7 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
             tasks=member_tasks,
             messages=member_messages,
             source_errors={key: value for key, value in source_errors.items() if value},
+            attendance=member_attendance,
         ))
     if len(commits) > assigned_commits:
         logger.warning("存在未映射到任何成员的提交记录，已跳过",
@@ -202,6 +227,9 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
     if len(messages) > assigned_messages:
         logger.warning("存在未映射到任何成员的消息记录，已跳过",
                        extra={"count": len(messages) - assigned_messages})
+    if len(attendance) > assigned_attendance:
+        logger.warning("存在未映射到任何成员的考勤记录，已跳过",
+                       extra={"count": len(attendance) - assigned_attendance})
     return reports
 
 

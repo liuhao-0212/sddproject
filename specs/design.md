@@ -2,7 +2,7 @@
 
 ## 1. 系统架构
 - 架构模式：管道式架构（Pipeline Architecture）
-- 数据流向：GitHub API / 飞书任务 API / 飞书消息 API
+- 数据流向：GitHub API / 飞书任务 API / 飞书消息 API / 飞书考勤 API
   → 采集层（原始 JSON）→ 生成层（Markdown 日报）→ 推送层（邮件 + 飞书消息）
 - 共享基础层：配置管理、日志、错误处理、数据存储
 - 选型理由：选择能满足需求的最简架构；proposal 已定“无需常驻服务”“5 人团队”，故不采用微服务或事件驱动架构
@@ -10,7 +10,7 @@
 ## 2. 模块职责
 | 模块 | 文件 | 职责 | 不负责 |
 |---|---|---|---|
-| collector/ | github.py / lark_task.py / lark_msg.py | 从外部 API 获取原始数据（GitHub Commit、飞书任务状态、飞书群消息） | 不做数据格式化、不做去重判断、不做推送 |
+| collector/ | github.py / lark_task.py / lark_msg.py / lark_attendance.py | 从外部 API 获取原始数据（GitHub Commit、飞书任务状态、飞书群消息、飞书考勤） | 不做数据格式化、不做去重判断、不做推送 |
 | generator/ | formatter.py / template.py | 将原始数据组织为日报（数据整理 + Markdown 生成、日报模板管理） | 不做数据采集、不做 API 调用、不做推送 |
 | notifier/ | email.py / lark_bot.py | 将日报推送给目标（SMTP 邮件、飞书机器人消息） | 不做数据处理、不做日报生成、不做数据采集 |
 | shared/ | config.py / logger.py / errors.py / storage.py | 跨模块共享能力（配置读取校验、统一日志格式、自定义异常、SQLite 存储） | 不包含业务逻辑 |
@@ -41,6 +41,14 @@ MessageRecord（消息记录）
 - timestamp: datetime  # 发送时间
 - chat_name: str       # 群名称
 
+AttendanceRecord（考勤记录）
+- employee_id: str          # 飞书用户 ID
+- date: date                # 考勤日期
+- check_in: datetime | None # 签到时间
+- check_out: datetime | None# 签退时间
+- work_hours: float         # 工时（小时）
+- status: str               # 正常 / 迟到 / 早退 / 缺勤 / 休假
+
 ### 3.2 日报对象
 DailyReport（每日报告）
 - date: date           # 日报日期
@@ -56,7 +64,8 @@ MemberReport（成员报告）
 - commits: list[CommitRecord]  # 代码提交记录
 - tasks: list[TaskRecord]      # 任务变更记录
 - messages: list[MessageRecord] # 相关消息记录
-- source_errors: dict[str, str] # 数据源失败标注（数据源 key → 原因），由编排层填入
+- source_errors: dict[str, str] # 数据源失败标注（数据源 key → 原因）
+- attendance: AttendanceRecord | None  # 考勤记录（v1.1 新增）
 
 ### 3.3 成员身份映射（config.yaml）
 GitHub 用户名与飞书用户名需通过映射表关联：
@@ -72,12 +81,12 @@ members:
     lark: "wangwu@company.com"
 
 ## 4. 接口契约
+```text
 # 采集层
-```test
 github.collect(repos: list[str], since: datetime, until: datetime) → list[CommitRecord]
 lark_task.collect(project_id: str, since: datetime, until: datetime) → list[TaskRecord]
 lark_msg.collect(chat_id: str, keywords: list[str], since: datetime, until: datetime) → list[MessageRecord]
-```
+lark_attendance.collect(since: date, until: date) → CollectResult[AttendanceRecord]
 
 # 生成层
 generator.generate(members: list[MemberReport], date: date, team_name: str) → DailyReport
@@ -85,6 +94,7 @@ generator.generate(members: list[MemberReport], date: date, team_name: str) → 
 # 推送层
 email.send(report: DailyReport, recipients: list[str]) → bool
 lark_bot.send(report: DailyReport, chat_id: str) → bool
+```
 
 ## 5. 技术选型（ADR）
 
@@ -125,6 +135,37 @@ proposal 已要求“数据存储：本地 SQLite”，仍需正式评估其是�
 2. 5 人团队一年约 1250 条数据，SQLite 绰绰有余
 3. 零运维符合项目定位
 4. Python 标准库 sqlite3 开箱即用
+
+
+### ADR-003：采集接口返回 CollectResult（v1.1 新增）
+
+## 状态
+已采纳
+
+## 背景
+v1.1 新增飞书考勤采集。考勤存在两种要区分的情况：
+“接口调用失败” 与 “接口成功但数据缺失（如某人未签退）”。
+调用方必须能明确区分，才能分别标注“考勤数据暂不可用”与“签退缺失”。
+
+## 选项
+| 选项 | 优点 | 缺点 |
+|---|---|---|
+| 返回裸 list（同 v1.0 三个采集器） | 与既有接口一致 | 无法从返回值区分“空”与“失败” |
+| 返回 CollectResult[T] | 成功/失败显式可判 | 与 v1.0 三个采集器风格不一致 |
+
+## 决策
+考勤采集器返回 CollectResult[AttendanceRecord]
+
+## 理由
+1. 能否拿到数据必须由返回值本身表达（§6.1 要求“考勤不可用”显式标注）
+2. 避免再引入模块级 last_error 的隐式状态
+3. 已知代价：与 v1.0 三个采集器不一致；后续可评估统一（另开 ADR）
+
+## CollectResult 定义
+CollectResult[T]:
+- success: bool        # 调用是否成功
+- data: list[T]        # 成功时的数据（失败时为空列表）
+- error: str | None    # 失败原因（成功时为 None）
 
 ## 6. 非功能性约束
 ### 6.1 错误处理策略（优雅降级）

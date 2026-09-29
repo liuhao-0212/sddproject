@@ -1,8 +1,10 @@
 """日报生成：数据整理 + Markdown 生成 + Markdown→HTML 转换（design.md §4.2）。
 
 - generate(members, date, team_name) -> DailyReport
-- 三段式编排（proposal §2.1）：代码提交 → 任务进展 → 协作沟通，每成员独立段落
-- 空数据显示"今日无记录"；数据源失败标注"数据获取失败"（design.md §6.1）
+- 四段式编排（proposal §2.1，v1.1 增补工时统计）：代码提交 → 任务进展 → 工时统计 → 协作沟通，
+  每成员独立段落
+- 空数据显示"今日无记录"；数据源失败标注"数据获取失败"（design.md §6.1）；
+  考勤不可用标注"考勤数据暂不可用"（proposal §3.4）
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -14,6 +16,7 @@ from datetime import date, datetime
 from html import escape
 
 from collector.github import CommitRecord
+from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
 from generator.template import render_html
@@ -23,6 +26,7 @@ SOURCE_LABELS = {"github": "GitHub", "lark_task": "飞书任务", "lark_msg": "�
 
 NO_RECORDS_TEXT = "今日无记录"
 FAILURE_TEXT = "数据获取失败"
+ATTENDANCE_UNAVAILABLE_TEXT = "考勤数据暂不可用"
 
 
 @dataclass
@@ -39,6 +43,7 @@ class MemberReport:
     tasks: list[TaskRecord] = field(default_factory=list)        # 任务变更记录
     messages: list[MessageRecord] = field(default_factory=list)  # 相关消息记录
     source_errors: dict[str, str] = field(default_factory=dict)  # 数据源失败标注
+    attendance: AttendanceRecord | None = None  # 考勤记录（v1.1 新增；None 视为不可用）
 
 
 @dataclass
@@ -80,6 +85,7 @@ def _render_member(member: MemberReport) -> list[str]:
         lines += [f"- GitHub 用户名: {member.github_username}", ""]
     lines += ["### 代码提交", "", *_render_commits(member)]
     lines += ["### 任务进展", "", *_render_tasks(member)]
+    lines += ["### 工时统计", "", *_render_attendance(member)]  # v1.1：任务进展之后、协作沟通之前
     lines += ["### 协作沟通", "", *_render_messages(member)]
     lines += [""]
     return lines
@@ -125,6 +131,24 @@ def _render_messages(member: MemberReport) -> list[str]:
                      f"（{message.timestamp:%H:%M}）")
     lines.append("")
     return lines
+
+
+def _render_attendance(member: MemberReport) -> list[str]:
+    """工时统计板块（proposal §3.4 v1.1）：考勤不可用/缺记录时显示"考勤数据暂不可用"。"""
+    attendance = member.attendance
+    if attendance is None:
+        return [f"- {ATTENDANCE_UNAVAILABLE_TEXT}", ""]
+    if attendance.check_in is None and attendance.check_out is None \
+            and attendance.status in ("缺勤", "休假"):
+        return [f"- {attendance.status}", ""]
+    parts = [f"签到 {attendance.check_in:%H:%M}" if attendance.check_in else "签到缺失",
+             f"签退 {attendance.check_out:%H:%M}" if attendance.check_out else "签退缺失"]
+    line = " / ".join(parts)
+    if attendance.check_in and attendance.check_out:
+        line += f"，工时 {attendance.work_hours:g} 小时"
+    elif attendance.status == "签退缺失":
+        return [f"- {line}", ""]  # 状态即"签退缺失"，避免重复标注
+    return [f"- {line}（{attendance.status}）", ""]
 
 
 def _failure_line(source: str, member: MemberReport) -> str:

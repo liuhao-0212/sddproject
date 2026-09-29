@@ -12,6 +12,7 @@ import pytest
 
 import main
 from collector.github import CommitRecord
+from collector.lark_attendance import AttendanceRecord, CollectResult
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
 
@@ -54,6 +55,13 @@ def make_message(sender="zhangsan@company.com", content="评审文档已上传")
                          chat_name="团队群")
 
 
+def make_attendance(employee_id="zhangsan@company.com", work_hours=9.0, status="正常"):
+    return AttendanceRecord(employee_id=employee_id, date=REPORT_DATE,
+                            check_in=datetime(2026, 9, 29, 9, 0, tzinfo=TZ),
+                            check_out=datetime(2026, 9, 29, 18, 0, tzinfo=TZ),
+                            work_hours=work_hours, status=status)
+
+
 class _FakeDate:
     @staticmethod
     def today():
@@ -61,8 +69,10 @@ class _FakeDate:
 
 
 def stub_sources(monkeypatch, commits=None, tasks=None, messages=None,
-                 github_err=None, task_err=None, msg_err=None):
-    """打桩三个采集模块：返回固定记录，失败原因经 get_last_error 注入。"""
+                 attendance=None, github_err=None, task_err=None, msg_err=None,
+                 attendance_err=None):
+    """打桩采集模块：返回固定记录；v1.0 三个数据源经 get_last_error 注入失败原因，
+    考勤经 CollectResult 注入（ADR-003）。"""
     monkeypatch.setattr(main.github, "collect",
                         lambda repos, since, until: list(commits or []))
     monkeypatch.setattr(main.github, "get_last_error", lambda: github_err)
@@ -72,6 +82,11 @@ def stub_sources(monkeypatch, commits=None, tasks=None, messages=None,
     monkeypatch.setattr(main.lark_msg, "collect",
                         lambda chat_id, keywords, since, until: list(messages or []))
     monkeypatch.setattr(main.lark_msg, "get_last_error", lambda: msg_err)
+    monkeypatch.setattr(main.lark_attendance, "collect",
+                        lambda since, until: CollectResult(
+                            success=attendance_err is None,
+                            data=list(attendance or []),
+                            error=attendance_err))
 
 
 @pytest.fixture
@@ -109,7 +124,8 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
     stub_sources(monkeypatch,
                  commits=[make_commit()],
                  tasks=[make_task()],
-                 messages=[make_message()])
+                 messages=[make_message()],
+                 attendance=[make_attendance()])
 
     rc = main.run(dry_run=False)
 
@@ -122,7 +138,7 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
     assert report.date == REPORT_DATE
     assert report.team_name == "研发一组"
     assert "## 张三" in report.markdown
-    for title in ("代码提交", "任务进展", "协作沟通"):
+    for title in ("代码提交", "任务进展", "工时统计", "协作沟通"):
         assert f"### {title}" in report.markdown
     assert "feat: 登录页" in report.markdown
     assert "实现登录页：未开始 → 进行中" in report.markdown
@@ -170,7 +186,8 @@ def test_empty_member_shows_no_records_today(monkeypatch, env):
 # ---------- 4. 全部失败场景 ----------
 
 def test_all_sources_failed_no_report(monkeypatch, env, caplog):
-    stub_sources(monkeypatch, github_err="a", task_err="b", msg_err="c")
+    stub_sources(monkeypatch, github_err="a", task_err="b", msg_err="c",
+                 attendance_err="d")
 
     with caplog.at_level(logging.ERROR):
         rc = main.run(dry_run=False)
@@ -181,6 +198,49 @@ def test_all_sources_failed_no_report(monkeypatch, env, caplog):
     assert env["saved"] == []       # 不落库
     assert len(env["alerts_email"]) == 1  # 告警邮件（§6.1）
     assert "所有数据源均不可用" in caplog.text
+
+
+# ---------- v1.1：考勤采集接入 ----------
+
+def test_attendance_rendered_in_report(monkeypatch, env):
+    stub_sources(monkeypatch, commits=[make_commit()],
+                 attendance=[make_attendance()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "### 工时统计" in report.markdown
+    assert "签到 09:00 / 签退 18:00，工时 9 小时（正常）" in report.markdown
+    # 无考勤记录的成员同样标注"考勤数据暂不可用"（李四）
+    assert report.markdown.count("考勤数据暂不可用") == 1
+
+
+def test_attendance_failure_shows_unavailable(monkeypatch, env, caplog):
+    stub_sources(monkeypatch, commits=[make_commit()], attendance_err="考勤接口超时")
+
+    with caplog.at_level(logging.ERROR):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "考勤数据暂不可用" in report.markdown
+    assert "考勤数据暂不可用" in report.html
+    assert "飞书考勤采集失败" in caplog.text  # 异常经日志显式记录，未被吞掉
+    # 其他数据源正常渲染，单源失败不阻断日报生成
+    assert "feat: 登录页" in report.markdown
+
+
+def test_unmapped_attendance_record_warns(monkeypatch, env, caplog):
+    stub_sources(monkeypatch, commits=[make_commit()],
+                 attendance=[make_attendance(employee_id="unknown@company.com")])
+
+    with caplog.at_level(logging.WARNING):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert "未映射到任何成员的考勤记录" in caplog.text
+    assert "考勤数据暂不可用" in env["emails"][0][0].markdown
 
 
 # ---------- 5. 性能（Mock 环境） ----------
