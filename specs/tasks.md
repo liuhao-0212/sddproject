@@ -45,12 +45,12 @@
 依赖: Task 2
 
 验收标准:
-- [ ] collect() 函数签名符合 design.md §4.1 的接口定义
-- [ ] 返回的每个 CommitRecord 包含全部 7 个字段且类型正确
-- [ ] 支持分页查询（GitHub API 默认每页 30 条）
-- [ ] API 超时重试 3 次（间隔 5s），若仍失败则返回空列表 + 错误日志
-- [ ] GitHub API 限流（HTTP 403）时，等待 reset 时间后重试
-- [ ] 使用 Mock 数据的单元测试全部通过
+- [x] collect() 函数签名符合 design.md §4.1 的接口定义
+- [x] 返回的每个 CommitRecord 包含全部 7 个字段且类型正确
+- [x] 支持分页查询（GitHub API 默认每页 30 条）
+- [x] API 超时重试 3 次（间隔 5s），若仍失败则返回空列表 + 错误日志
+- [x] GitHub API 限流（HTTP 403）时，等待 reset 时间后重试
+- [x] 使用 Mock 数据的单元测试全部通过
 
 ---
 
