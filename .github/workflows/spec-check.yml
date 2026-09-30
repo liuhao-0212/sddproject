@@ -1,0 +1,62 @@
+name: 规范完整性检查
+
+# 第9章 9.6.3：PR 中代码与规范（specs/）同步的完整性检查
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - 'specs/**'
+
+jobs:
+  spec-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码（含完整历史，供 diff 使用）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 规范完整性检查
+        shell: bash
+        run: |
+          errors=0
+
+          # 1) 硬错误：三份规范文件必须存在
+          for f in specs/proposal.md specs/design.md specs/tasks.md; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::缺少规范文件 $f，规范完整性检查不通过"
+              errors=$((errors + 1))
+            fi
+          done
+
+          # 2) 硬错误：proposal.md 必须含“不做”章节
+          if [ -f specs/proposal.md ] && ! grep -q '^#.*不做' specs/proposal.md; then
+            echo "::error file=specs/proposal.md::proposal.md 缺少“不做”章节"
+            errors=$((errors + 1))
+          fi
+
+          # 3) 警告：tasks.md 任务数多于“验收”出现次数（不阻止合并）
+          if [ -f specs/tasks.md ]; then
+            task_count=$(grep -c '^## Task' specs/tasks.md || true)
+            accept_count=$(grep -c '验收' specs/tasks.md || true)
+            if [ "$task_count" -gt "$accept_count" ]; then
+              echo "::warning file=specs/tasks.md::任务数($task_count)多于“验收”出现次数($accept_count)，请确认每个任务都定义了验收标准"
+            fi
+          fi
+
+          # 4) 警告：本次 diff 改了 Python 代码但没改 specs/（不阻止合并）
+          changed=$(git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" || true)
+          py_changed=$(printf '%s\n' "$changed" | grep -E '\.py$' || true)
+          specs_changed=$(printf '%s\n' "$changed" | grep -E '^specs/' || true)
+          if [ -n "$py_changed" ] && [ -z "$specs_changed" ]; then
+            echo "::warning::本次改动包含 Python 代码（**/*.py）但未修改 specs/ 目录，请确认是否需要同步规范"
+          fi
+
+          # 5) 硬错误汇总：>0 则 CI 失败，否则通过
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::规范完整性检查未通过，硬错误 $errors 个"
+            exit 1
+          fi
+          echo "规范检查通过"
