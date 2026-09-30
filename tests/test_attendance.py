@@ -304,6 +304,25 @@ def test_config_without_member_ids_returns_failure(monkeypatch):
     assert "members" in result.error
 
 
+def test_unexpected_exception_returns_failure_result(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return token_response()  # _collect_inner 被替换，不会发起真实请求
+
+    install(monkeypatch, handler)
+
+    def boom(since, until):
+        raise RuntimeError("内部错误")
+
+    monkeypatch.setattr(lark, "_collect_inner", boom)
+    with caplog.at_level(logging.ERROR):
+        result = lark.collect(SINCE, UNTIL)
+
+    assert result.success is False
+    assert result.data == []
+    assert "内部错误" in result.error
+    assert "未预期异常" in caplog.text
+
+
 # ---------- 数据清洗 ----------
 
 def test_record_without_employee_id_skipped(monkeypatch, caplog):

@@ -79,6 +79,11 @@ def collect(project_id: str, since: datetime, until: datetime) -> list[TaskRecor
             logger.error("飞书任务数据源采集失败，返回空列表",
                          extra={"project_id": project_id, "reason": str(exc)}, exc_info=exc)
             return []
+        except Exception as exc:  # 兜底：任何失败不得逃逸出 collect()（design.md §6.1 原则 1）
+            _last_error = str(exc)
+            logger.error("飞书任务采集发生未预期异常，返回空列表",
+                         extra={"project_id": project_id, "reason": str(exc)}, exc_info=exc)
+            return []
     finally:
         client.close()
 

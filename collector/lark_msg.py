@@ -90,6 +90,11 @@ def collect(chat_id: str, keywords: list[str], since: datetime,
             logger.error("飞书消息数据源采集失败，返回空列表",
                          extra={"chat_id": chat_id, "reason": str(exc)}, exc_info=exc)
             return []
+        except Exception as exc:  # 兜底：任何失败不得逃逸出 collect()（design.md §6.1 原则 1）
+            _last_error = str(exc)
+            logger.error("飞书消息采集发生未预期异常，返回空列表",
+                         extra={"chat_id": chat_id, "reason": str(exc)}, exc_info=exc)
+            return []
     finally:
         client.close()
 
@@ -216,6 +221,9 @@ def _sensitive_keywords() -> list[str]:
         return list(DEFAULT_SENSITIVE_KEYWORDS)
     lark_msg = cfg.get("collector", {}).get("lark_msg", {})
     value = lark_msg.get("sensitive_keywords")
-    if isinstance(value, list) and value:
-        return [str(word) for word in value]
+    if isinstance(value, list):
+        # 归一化：去空白、剔除空串；全部无效时回退默认值，保证黑名单绝不失效（§6.2）
+        words = [str(word).strip() for word in value if str(word).strip()]
+        if words:
+            return words
     return list(DEFAULT_SENSITIVE_KEYWORDS)

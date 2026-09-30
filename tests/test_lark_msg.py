@@ -263,6 +263,17 @@ def test_sensitive_keywords_default_when_config_missing(tmp_path, caplog):
     assert "使用默认值" in caplog.text
 
 
+def test_sensitive_keywords_ignores_blank_entries(tmp_path, monkeypatch):
+    # 黑名单含空串/纯空白条目：剔除无效条目，保留有效词（§6.2 绝不放行）
+    path = write_config(tmp_path, ["", "福利"])
+    monkeypatch.setattr(lark_msg, "CONFIG_PATH", str(path))
+    assert lark_msg._sensitive_keywords() == ["福利"]
+
+    path2 = write_config(tmp_path, [" "])
+    monkeypatch.setattr(lark_msg, "CONFIG_PATH", str(path2))
+    assert lark_msg._sensitive_keywords() == lark_msg.DEFAULT_SENSITIVE_KEYWORDS
+
+
 def test_message_with_sensitive_from_config_excluded(tmp_path, monkeypatch):
     path = write_config(tmp_path, ["福利"])
 
@@ -358,6 +369,24 @@ def test_timeout_retries_three_times_then_returns_empty(monkeypatch, caplog):
     assert len(msg_attempts) == 1 + lark_common.MAX_RETRIES
     assert sleeps == [lark_common.RETRY_INTERVAL] * lark_common.MAX_RETRIES
     assert "飞书消息数据源采集失败" in caplog.text
+
+
+def test_unexpected_exception_does_not_escape_collect(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return token_response()  # _collect_inner 被替换，不会发起真实请求
+
+    install(monkeypatch, handler)
+
+    def boom(client, chat_id, keywords, since, until):
+        raise RuntimeError("内部错误")
+
+    monkeypatch.setattr(lark_msg, "_collect_inner", boom)
+    with caplog.at_level(logging.ERROR):
+        records = lark_msg.collect("oc_test", KEYWORDS, BASE_TIME, END_TIME)
+
+    assert records == []
+    assert lark_msg.get_last_error() is not None
+    assert "未预期异常" in caplog.text
 
 
 def test_chat_name_fetch_failure_falls_back_to_chat_id(monkeypatch, caplog):

@@ -306,6 +306,40 @@ def test_malformed_json_detail_keeps_commit_with_zero_stats(monkeypatch, caplog)
     assert "响应非 JSON" in caplog.text
 
 
+def test_malformed_stats_fields_keep_commit_with_zero_stats(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/commits"):
+            return httpx.Response(200, json=[commit_payload("c1")])
+        return httpx.Response(200, json={
+            "sha": "c1",
+            "stats": {"additions": None, "deletions": "3"},
+            "files": 2,  # 非列表，len() 会抛 TypeError
+        })
+
+    install(monkeypatch, handler)
+    with caplog.at_level(logging.WARNING):
+        records = github.collect(["org/repo"], BASE_TIME, END_TIME)
+
+    assert len(records) == 1
+    assert records[0].additions == 0
+    assert records[0].deletions == 0
+    assert records[0].files_changed == 0
+    assert "变更统计字段异常" in caplog.text
+
+
+def test_unexpected_exception_does_not_escape_collect(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise RuntimeError("boom")
+
+    install(monkeypatch, handler)
+    with caplog.at_level(logging.ERROR):
+        records = github.collect(["org/repo"], BASE_TIME, END_TIME)
+
+    assert records == []
+    assert github.get_last_error() is not None
+    assert "未预期异常" in caplog.text
+
+
 # ---------- 客户端构造 ----------
 
 def test_last_error_set_on_failure_and_cleared_on_success(monkeypatch):

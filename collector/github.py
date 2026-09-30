@@ -99,6 +99,11 @@ def _collect_repo(client: httpx.Client, repo: str, since: datetime, until: datet
         logger.error("github 数据源采集失败，返回空列表",
                      extra={"repo": repo, "reason": str(exc)}, exc_info=exc)
         return []
+    except Exception as exc:  # 兜底：任何失败都不得逃逸出 collect()（§6.1 原则 1/3）
+        _last_error = str(exc)
+        logger.error("github 采集发生未预期异常，返回空列表",
+                     extra={"repo": repo, "reason": str(exc)}, exc_info=exc)
+        return []
 
     records: list[CommitRecord] = []
     for raw in raw_commits:
@@ -177,9 +182,17 @@ def _enrich_stats(client: httpx.Client, repo: str, sha: str, record: CommitRecor
     if not isinstance(data, dict):
         return
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
-    record.additions = int(stats.get("additions", 0))
-    record.deletions = int(stats.get("deletions", 0))
-    record.files_changed = len(data.get("files") or [])
+    try:
+        additions = int(stats.get("additions", 0))
+        deletions = int(stats.get("deletions", 0))
+        files_changed = len(data.get("files") or [])
+    except (TypeError, ValueError):
+        logger.warning("github commit 变更统计字段异常，统计置 0",
+                       extra={"repo": repo, "sha": sha})
+        return
+    record.additions = additions
+    record.deletions = deletions
+    record.files_changed = files_changed
 
 
 def _request_with_retry(client: httpx.Client, method: str, url: str, **kwargs: Any) -> httpx.Response:

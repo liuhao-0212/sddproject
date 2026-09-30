@@ -107,6 +107,9 @@ def collect(since: date, until: date) -> CollectResult[AttendanceRecord]:
     except (CollectorError, ConfigError) as exc:
         logger.error("飞书考勤数据源采集失败", extra={"reason": str(exc)}, exc_info=exc)
         return CollectResult(success=False, data=[], error=str(exc))
+    except Exception as exc:  # 兜底：任何失败不得逃逸出 collect()（design.md §6.1 原则 1）
+        logger.error("飞书考勤采集发生未预期异常", extra={"reason": str(exc)}, exc_info=exc)
+        return CollectResult(success=False, data=[], error=str(exc))
 
 
 def _collect_inner(since: date, until: date) -> CollectResult[AttendanceRecord]:

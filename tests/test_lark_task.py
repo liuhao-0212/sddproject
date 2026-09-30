@@ -331,3 +331,19 @@ def test_missing_credentials_returns_empty(monkeypatch, caplog):
 
     assert records == []
     assert "LARK_APP_ID" in caplog.text
+
+
+def test_unexpected_exception_does_not_escape_collect(monkeypatch, caplog):
+    """非 CollectorError 的异常也不得逃逸出 collect()（design.md §6.1 原则 1）。"""
+
+    def boom(*args, **kwargs):
+        raise ValueError("unexpected parsing failure")
+
+    install(monkeypatch, lambda request: token_response())
+    monkeypatch.setattr(lark, "_collect_inner", boom)
+    with caplog.at_level(logging.ERROR):
+        records = lark.collect("proj-001", BASE_TIME, END_TIME)
+
+    assert records == []
+    assert lark.get_last_error() is not None
+    assert "未预期异常" in caplog.text
