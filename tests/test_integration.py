@@ -6,10 +6,11 @@
 
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as dtime, timezone
 
 import pytest
 
+import generator.formatter as formatter
 import main
 from collector.github import CommitRecord
 from collector.lark_attendance import AttendanceRecord, CollectResult
@@ -87,6 +88,13 @@ def stub_sources(monkeypatch, commits=None, tasks=None, messages=None,
                             success=attendance_err is None,
                             data=list(attendance or []),
                             error=attendance_err))
+
+
+@pytest.fixture(autouse=True)
+def fixed_local_tz(monkeypatch):
+    """固定生成层展示时区为 UTC，保证既有断言与机器时区无关
+    （§6.4 转换逻辑由 test_generator.py 专项测试覆盖）。"""
+    monkeypatch.setattr(formatter, "LOCAL_TZ", timezone.utc)
 
 
 @pytest.fixture
@@ -293,3 +301,39 @@ def test_execution_logs_contain_required_fields(monkeypatch, env, caplog):
     assert "数据源采集完成" in text   # 各数据源采集条数
     assert "推送结果" in text         # 推送结果
     assert "日报流程结束" in text     # 结束时间
+
+
+# ---------- §6.4 时区约定：采集窗口必须携带时区 ----------
+
+def test_collection_windows_are_tz_aware(monkeypatch, env):
+    windows: dict = {}
+
+    def github_collect(repos, since, until):
+        windows["github"] = (since, until)
+        return []
+
+    def task_collect(project_id, since, until):
+        windows["lark_task"] = (since, until)
+        return []
+
+    def msg_collect(chat_id, keywords, since, until):
+        windows["lark_msg"] = (since, until)
+        return []
+
+    stub_sources(monkeypatch)
+    monkeypatch.setattr(main.github, "collect", github_collect)
+    monkeypatch.setattr(main.lark_task, "collect", task_collect)
+    monkeypatch.setattr(main.lark_msg, "collect", msg_collect)
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert set(windows) == {"github", "lark_task", "lark_msg"}
+    for since, until in windows.values():
+        assert since.tzinfo is not None and since.utcoffset() is not None  # 禁止裸 naive datetime
+        assert until.tzinfo is not None and until.utcoffset() is not None
+        assert since < until
+    # 窗口起点 = 本地时区当日 00:00（design.md §6.4："当日"指本地自然日）
+    since = windows["github"][0]
+    assert since.hour == 0 and since.minute == 0
+    assert since == datetime.combine(REPORT_DATE, dtime.min, tzinfo=since.tzinfo)

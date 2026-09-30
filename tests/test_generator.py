@@ -1,7 +1,10 @@
 """generator 单元测试（使用 Mock 数据）。"""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
+import generator.formatter as formatter
 from collector.github import CommitRecord
 from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
@@ -10,6 +13,12 @@ from generator import DailyReport, MemberReport, generate
 
 REPORT_DATE = date(2026, 9, 29)
 TZ = timezone.utc
+
+
+@pytest.fixture(autouse=True)
+def fixed_local_tz(monkeypatch):
+    """固定展示时区为 UTC，保证既有断言与机器时区无关（§6.4 转换逻辑由专项测试覆盖）。"""
+    monkeypatch.setattr(formatter, "LOCAL_TZ", timezone.utc)
 
 
 def make_member(**overrides):
@@ -220,3 +229,24 @@ def test_attendance_unavailable_does_not_count_as_no_records():
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
     assert markdown.count("今日无记录") == 3  # 三个板块各一条；工时统计显示"考勤数据暂不可用"
+
+
+# ---------- §6.4 时区约定：展示统一转换为本地时区 ----------
+
+def test_times_rendered_in_local_timezone(monkeypatch):
+    """固定时区（UTC+8）下，UTC 数据应展示为本地时间（design.md §6.4）。"""
+    monkeypatch.setattr(formatter, "LOCAL_TZ", timezone(timedelta(hours=8)))
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "[org/repo] feat: 登录页（+10/-3，2 个文件）— 16:30" in markdown  # 08:30 UTC
+    assert "实现登录页：未开始 → 进行中（18:00）" in markdown                # 10:00 UTC
+    assert "[团队群] 张三：评审文档已上传（18:05）" in markdown              # 10:05 UTC
+
+
+def test_attendance_times_rendered_in_local_timezone(monkeypatch):
+    """考勤签到/签退时间同样转换为本地时区展示（design.md §6.4），跨日不截断。"""
+    monkeypatch.setattr(formatter, "LOCAL_TZ", timezone(timedelta(hours=8)))
+    member = make_member(attendance=make_attendance())  # 09:00 / 18:00 UTC
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "签到 17:00 / 签退 02:00，工时 9 小时（正常）" in markdown

@@ -35,6 +35,9 @@ from shared.storage import Storage
 
 logger = get_logger("main")
 
+# 系统本地时区（design.md §6.4："当日"指本地自然日，采集窗口必须携带时区）
+LOCAL_TZ = datetime.now().astimezone().tzinfo
+
 
 def main(argv: list[str] | None = None) -> int:
     """命令行入口。"""
@@ -69,8 +72,9 @@ def run(dry_run: bool = False) -> int:
 def _run(dry_run: bool) -> int:
     cfg = load_config()
     today = date.today()
-    since = datetime.combine(today, time.min)  # 采集窗口：当日 00:00 至执行时刻（proposal §4）
-    until = datetime.now()
+    # 采集窗口：本地时区当日 00:00 → 执行时刻，必须携带时区（design.md §6.4）
+    since = datetime.combine(today, time.min, tzinfo=LOCAL_TZ)
+    until = datetime.now(LOCAL_TZ)
 
     # 1) 采集：四个数据源相互独立，单源失败不阻断其他源
     commits = github.collect(cfg["collector"]["github"]["repos"], since, until)
@@ -144,7 +148,7 @@ def check() -> int:
     logger.info("配置校验通过", extra={"team_name": cfg["team_name"],
                                        "members": len(cfg["members"])})
 
-    now = datetime.now()
+    now = datetime.now(LOCAL_TZ)
     probe_since = now - timedelta(minutes=1)  # 探测窗口仅 1 分钟，避免拉取全量数据
     results: dict[str, bool] = {}
 

@@ -28,6 +28,14 @@ NO_RECORDS_TEXT = "今日无记录"
 FAILURE_TEXT = "数据获取失败"
 ATTENDANCE_UNAVAILABLE_TEXT = "考勤数据暂不可用"
 
+# 系统本地时区（design.md §6.4：日报中所有时间统一转换为本地时区后显示）
+LOCAL_TZ = datetime.now().astimezone().tzinfo
+
+
+def _local(dt: datetime) -> datetime:
+    """转换为本地时区用于展示（design.md §6.4；naive 输入视为已是本地时间）。"""
+    return dt.astimezone(LOCAL_TZ)
+
 
 @dataclass
 class MemberReport:
@@ -101,7 +109,7 @@ def _render_commits(member: MemberReport) -> list[str]:
         message = commit.message.replace("\n", " ").strip()
         lines.append(f"- [{commit.repo}] {message}"
                      f"（+{commit.additions}/-{commit.deletions}，"
-                     f"{commit.files_changed} 个文件）— {commit.timestamp:%H:%M}")
+                     f"{commit.files_changed} 个文件）— {_local(commit.timestamp):%H:%M}")
     lines.append("")
     return lines
 
@@ -114,7 +122,7 @@ def _render_tasks(member: MemberReport) -> list[str]:
     lines = []
     for task in sorted(member.tasks, key=lambda t: t.updated_at):
         lines.append(f"- {task.title}：{task.status_from} → {task.status_to}"
-                     f"（{task.updated_at:%H:%M}）")
+                     f"（{_local(task.updated_at):%H:%M}）")
     lines.append("")
     return lines
 
@@ -128,7 +136,7 @@ def _render_messages(member: MemberReport) -> list[str]:
     for message in sorted(member.messages, key=lambda m: m.timestamp):
         content = message.content.replace("\n", " ").strip()
         lines.append(f"- [{message.chat_name}] {message.sender}：{content}"
-                     f"（{message.timestamp:%H:%M}）")
+                     f"（{_local(message.timestamp):%H:%M}）")
     lines.append("")
     return lines
 
@@ -141,8 +149,8 @@ def _render_attendance(member: MemberReport) -> list[str]:
     if attendance.check_in is None and attendance.check_out is None \
             and attendance.status in ("缺勤", "休假"):
         return [f"- {attendance.status}", ""]
-    parts = [f"签到 {attendance.check_in:%H:%M}" if attendance.check_in else "签到缺失",
-             f"签退 {attendance.check_out:%H:%M}" if attendance.check_out else "签退缺失"]
+    parts = [f"签到 {_local(attendance.check_in):%H:%M}" if attendance.check_in else "签到缺失",
+             f"签退 {_local(attendance.check_out):%H:%M}" if attendance.check_out else "签退缺失"]
     line = " / ".join(parts)
     if attendance.check_in and attendance.check_out:
         line += f"，工时 {attendance.work_hours:g} 小时"
