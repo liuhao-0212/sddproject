@@ -123,7 +123,10 @@ def _fetch_commits(client: httpx.Client, repo: str, since: datetime, until: date
     for page in range(1, MAX_PAGES + 1):
         resp = _request_with_retry(client, "GET", f"{BASE_URL}/repos/{repo}/commits",
                                    params={**params, "page": page})
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise CollectorError(f"github commits 接口返回非 JSON: repo={repo}") from exc
         if not isinstance(data, list):
             raise CollectorError(f"github commits 接口返回格式异常: repo={repo}")
         commits.extend(data)
@@ -165,7 +168,12 @@ def _enrich_stats(client: httpx.Client, repo: str, sha: str, record: CommitRecor
         logger.warning("github commit 变更统计获取失败，统计置 0",
                        extra={"repo": repo, "sha": sha, "reason": str(exc)})
         return
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        logger.warning("github commit 变更统计响应非 JSON，统计置 0",
+                       extra={"repo": repo, "sha": sha, "reason": str(exc)})
+        return
     if not isinstance(data, dict):
         return
     stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}

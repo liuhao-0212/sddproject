@@ -277,6 +277,35 @@ def test_detail_failure_keeps_commit_with_zero_stats(monkeypatch, caplog):
     assert "变更统计获取失败" in caplog.text
 
 
+def test_malformed_json_commits_returns_empty_with_error_log(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    install(monkeypatch, handler)
+    with caplog.at_level(logging.ERROR):
+        records = github.collect(["org/repo"], BASE_TIME, END_TIME)
+
+    assert records == []
+    assert "github 数据源采集失败" in caplog.text
+
+
+def test_malformed_json_detail_keeps_commit_with_zero_stats(monkeypatch, caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/commits"):
+            return httpx.Response(200, json=[commit_payload("c1")])
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    install(monkeypatch, handler)
+    with caplog.at_level(logging.WARNING):
+        records = github.collect(["org/repo"], BASE_TIME, END_TIME)
+
+    assert len(records) == 1
+    assert records[0].additions == 0
+    assert records[0].deletions == 0
+    assert records[0].files_changed == 0
+    assert "响应非 JSON" in caplog.text
+
+
 # ---------- 客户端构造 ----------
 
 def test_last_error_set_on_failure_and_cleared_on_success(monkeypatch):
