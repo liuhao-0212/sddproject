@@ -12,6 +12,7 @@
   “数据获取失败”/“考勤数据暂不可用”
 - 所有数据源失败时不生成空日报，记录错误日志并发送告警邮件
 - 推送渠道互为备份告警通道：邮件失败经飞书告警，飞书失败经邮件告警
+- 推送渠道未配置时跳过（不推送、不告警），仅「已配置且发送失败」触发备份告警（v1.2）
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from collector.lark_attendance import AttendanceRecord
 from generator import DailyReport, MemberReport, generate
 from notifier import email as email_notifier
 from notifier import lark_bot as lark_bot_notifier
-from shared.config import load_config
+from shared.config import env, load_config
 from shared.errors import ReportError
 from shared.logger import get_logger, setup_logging
 from shared.storage import Storage
@@ -127,12 +128,23 @@ def _run(dry_run: bool) -> int:
         logger.error("日报写入存储失败", extra={"reason": str(exc)}, exc_info=exc)
 
     # 6) 推送 + 互为备份告警（§6.1）
-    email_ok = email_notifier.send(report, cfg["notifier"]["email"]["recipients"])
-    lark_ok = lark_bot_notifier.send(report, cfg["collector"]["lark_msg"]["chat_id"])
+    # v1.2：未配置的渠道跳过（不推送、不告警）；仅「已配置且发送失败」触发备份告警
+    email_recipients = _email_recipients(cfg)
+    if email_recipients:
+        email_ok: bool | None = email_notifier.send(report, email_recipients)
+    else:
+        email_ok = None
+        logger.info("邮件渠道未配置，跳过推送与备份告警", extra={"channel": "email"})
+    if _lark_webhook_configured(cfg):
+        lark_ok: bool | None = lark_bot_notifier.send(
+            report, cfg["collector"]["lark_msg"]["chat_id"])
+    else:
+        lark_ok = None
+        logger.info("飞书渠道未配置，跳过推送与备份告警", extra={"channel": "lark_bot"})
     logger.info("推送结果", extra={"email": email_ok, "lark": lark_ok})
-    if not email_ok:
+    if email_ok is False:
         _alert_lark(cfg, today, "邮件推送失败，请检查邮件配置")
-    if not lark_ok:
+    if lark_ok is False:
         _alert_email(cfg, today, "飞书推送失败，请检查飞书机器人配置")
     return 0
 
@@ -255,7 +267,7 @@ def _alert_email(cfg: dict, today: date, message: str) -> None:
     ok = email_notifier.send(_alert_report(today, cfg["team_name"], message),
                              cfg["notifier"]["email"]["recipients"])
     if not ok:
-        logger.error("告警邮件发送失败", extra={"message": message})
+        logger.error("告警邮件发送失败", extra={"alert_message": message})
 
 
 def _alert_lark(cfg: dict, today: date, message: str) -> None:
@@ -263,7 +275,21 @@ def _alert_lark(cfg: dict, today: date, message: str) -> None:
     ok = lark_bot_notifier.send(_alert_report(today, cfg["team_name"], message),
                                 cfg["collector"]["lark_msg"]["chat_id"])
     if not ok:
-        logger.error("飞书告警发送失败", extra={"message": message})
+        logger.error("飞书告警发送失败", extra={"alert_message": message})
+
+
+def _email_recipients(cfg: dict) -> list[str]:
+    """邮件推送渠道是否已配置（v1.2）：notifier.email.recipients 非空。返回收件人列表。"""
+    email_cfg = cfg.get("notifier", {}).get("email") or {}
+    return [str(r) for r in (email_cfg.get("recipients") or [])]
+
+
+def _lark_webhook_configured(cfg: dict) -> bool:
+    """飞书推送渠道是否已配置（v1.2）：notifier.lark_bot.webhook_url 或
+    环境变量 LARK_BOT_WEBHOOK_URL 任一非空（回退规则与 notifier/lark_bot.py 一致）。"""
+    lark_cfg = cfg.get("notifier", {}).get("lark_bot") or {}
+    return bool(str(lark_cfg.get("webhook_url") or "").strip()) \
+        or bool(env("LARK_BOT_WEBHOOK_URL").strip())
 
 
 def _probe_smtp(email_cfg: dict) -> bool:

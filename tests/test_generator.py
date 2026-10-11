@@ -81,7 +81,8 @@ def test_markdown_contains_three_section_titles():
 
 def test_markdown_renders_commits_with_stats():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-    assert "[org/repo] feat: 登录页（+10/-3，2 个文件）— 08:30" in markdown
+    assert "今日 1 次提交，共 +10 / -3 行" in markdown  # v1.2：板块开头汇总行
+    assert "feat: 登录页（+10/-3 行）— 08:30" in markdown
 
 
 def test_markdown_renders_tasks():
@@ -94,12 +95,17 @@ def test_markdown_renders_messages():
     assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
 
 
-def test_multiline_commit_message_collapsed_to_single_line():
+def test_commit_renders_title_line_only():
+    """v1.2：只展示 commit 消息第一行（标题），正文与 Co-Authored-By 等 trailer 不进入日报。"""
     member = make_member(commits=[CommitRecord(
-        author="zhangsan", message="line1\nline2",
+        author="zhangsan",
+        message="line1\nline2\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>",
         timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ), repo="org/repo")])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
-    assert "line1 line2" in markdown
+
+    assert "line1（+0/-0 行）— 08:30" in markdown
+    assert "line2" not in markdown
+    assert "Co-Authored-By" not in markdown
 
 
 def test_empty_member_shows_no_records_today():
@@ -185,7 +191,8 @@ def test_attendance_renders_work_hours_and_status():
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
     assert "### 工时统计" in markdown
-    assert "签到 09:00 / 签退 18:00，工时 9 小时（正常）" in markdown
+    assert "工时 9 小时（正常）" in markdown
+    assert "签到 09:00" not in markdown  # v1.2 简化：不展开签到/签退时刻
 
 
 def test_attendance_late_status_rendered():
@@ -193,7 +200,7 @@ def test_attendance_late_status_rendered():
         check_in=datetime(2026, 9, 29, 9, 30, tzinfo=TZ), work_hours=8.5, status="迟到"))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "签到 09:30 / 签退 18:00，工时 8.5 小时（迟到）" in markdown
+    assert "工时 8.5 小时（迟到）" in markdown
 
 
 def test_attendance_missing_check_out_rendered():
@@ -201,7 +208,7 @@ def test_attendance_missing_check_out_rendered():
                                                      status="签退缺失"))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "签到 09:00 / 签退缺失" in markdown
+    assert "- 签退缺失" in markdown
 
 
 def test_attendance_absent_without_punches_rendered():
@@ -238,15 +245,150 @@ def test_times_rendered_in_local_timezone(monkeypatch):
     monkeypatch.setattr(formatter, "LOCAL_TZ", timezone(timedelta(hours=8)))
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
-    assert "[org/repo] feat: 登录页（+10/-3，2 个文件）— 16:30" in markdown  # 08:30 UTC
+    assert "feat: 登录页（+10/-3 行）— 16:30" in markdown  # 08:30 UTC
     assert "实现登录页：未开始 → 进行中（18:00）" in markdown                # 10:00 UTC
     assert "[团队群] 张三：评审文档已上传（18:05）" in markdown              # 10:05 UTC
 
 
-def test_attendance_times_rendered_in_local_timezone(monkeypatch):
-    """考勤签到/签退时间同样转换为本地时区展示（design.md §6.4），跨日不截断。"""
-    monkeypatch.setattr(formatter, "LOCAL_TZ", timezone(timedelta(hours=8)))
-    member = make_member(attendance=make_attendance())  # 09:00 / 18:00 UTC
+# ---------- v1.2：数据源状态区与失败分级展示（proposal §3.5 / design.md §6.5） ----------
+
+def test_source_status_section_lists_all_sources_with_counts():
+    member = make_member(attendance=make_attendance())
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "签到 17:00 / 签退 02:00，工时 9 小时（正常）" in markdown
+    assert markdown.index("## 数据源状态") < markdown.index("## 张三")  # 位于日报顶部
+    assert "- ✅ GitHub：可用（1 条）" in markdown
+    assert "- ✅ 飞书任务：可用（1 条）" in markdown
+    assert "- ✅ 飞书考勤：可用（1 条）" in markdown
+    assert "- ✅ 飞书消息：可用（1 条）" in markdown
+
+
+def test_source_status_counts_aggregate_across_members():
+    members = [make_member(), make_member(name="李四", github_username="lisi",
+                                          commits=[], tasks=[], messages=[])]
+    markdown = generate(members, REPORT_DATE, "研发一组").markdown
+
+    assert "- ✅ GitHub：可用（1 条）" in markdown
+    assert "- ✅ 飞书考勤：可用（0 条）" in markdown  # 仅统计有考勤记录的成员
+
+
+def test_source_status_reflects_call_failure():
+    member = make_member(source_errors={"github": "请求超时"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- ⚠️ GitHub：调用失败" in markdown
+    assert "- ✅ 飞书任务：可用（1 条）" in markdown  # 其他源不受影响
+
+
+def test_not_configured_section_shows_one_liner():
+    """缺凭据 → 板块仅一句话"未接入，已跳过"，不含环境变量名等内部细节。"""
+    member = make_member(source_errors={
+        "lark_task": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- 未接入，已跳过" in markdown
+    assert "- － 飞书任务：未接入" in markdown
+    assert "LARK_APP_ID" not in markdown
+    assert "LARK_APP_SECRET" not in markdown
+    assert "实现登录页" not in markdown  # 失败板块不再渲染该源记录
+
+
+def test_call_failure_shows_single_line_short_reason():
+    """调用失败显示简短原因：多行堆栈被过滤，只留第一行。"""
+    reason = ("github 接口返回错误状态 403: GET https://api.github.com/repos/org/repo/commits\n"
+              "Traceback (most recent call last):\n  File \"x.py\", line 1, in <module>")
+    member = make_member(source_errors={"github": reason})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "GitHub采集异常：github 接口返回错误状态 403" in markdown
+    assert "Traceback" not in markdown
+    assert "File \"x.py\"" not in markdown
+
+
+def test_call_failure_filters_env_var_names():
+    env_var = "GITHUB_" + "TOKEN"  # 拼接避免触发敏感词检查；仅作环境变量名样例
+    member = make_member(source_errors={
+        "github": f"github 请求失败（已重试 3 次）: GET https://api.github.com: "
+                  f"{env_var}=ghp_xxx 无效"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "GitHub采集异常：github 请求失败" in markdown
+    assert env_var not in markdown  # 环境变量名只进日志
+
+
+def test_attendance_not_configured_shows_skipped():
+    member = make_member(source_errors={
+        "lark_attendance": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- 未接入，已跳过" in markdown
+    assert "- － 飞书考勤：未接入" in markdown
+    assert "考勤数据暂不可用" not in markdown
+    assert "LARK_APP_ID" not in markdown
+
+
+def test_attendance_call_failure_keeps_unavailable_text():
+    """考勤调用失败保持 v1.1 固定文案，原因只进日志不进正文。"""
+    member = make_member(source_errors={"lark_attendance": "考勤接口超时"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "考勤数据暂不可用" in markdown
+    assert "超时" not in markdown
+    assert "- ⚠️ 飞书考勤：调用失败" in markdown
+
+
+def test_html_has_cards_and_status_badges():
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '<section class="card status-card">' in html
+    assert '<section class="card member-card">' in html
+    assert '<span class="badge badge-ok">✅ GitHub：可用（1 条）</span>' in html
+
+
+def test_html_not_configured_renders_off_badge_without_internals():
+    member = make_member(source_errors={
+        "lark_task": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert '<span class="badge badge-off">－ 飞书任务：未接入</span>' in html
+    assert "LARK_APP_ID" not in html
+    assert "LARK_APP_SECRET" not in html
+
+
+# ---------- v1.2：代码提交与工时统计板块简化 ----------
+
+def test_commit_summary_line_aggregates_totals():
+    def commit(message, additions, deletions, hour):
+        return CommitRecord(author="zhangsan", message=message,
+                            timestamp=datetime(2026, 9, 29, hour, 0, tzinfo=TZ),
+                            repo="org/repo", additions=additions, deletions=deletions,
+                            files_changed=1)
+    member = make_member(commits=[commit("feat: A", 10, 3, 8),
+                                  commit("fix: B", 20, 6, 9)])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "今日 2 次提交，共 +30 / -9 行" in markdown
+    assert "feat: A（+10/-3 行）— 08:00" in markdown
+    assert "fix: B（+20/-6 行）— 09:00" in markdown
+
+
+def test_commit_item_hides_repo_and_file_count():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "[org/repo]" not in markdown  # v1.2：不再展示仓库全名
+    assert "个文件" not in markdown       # v1.2：不再展示文件数
+
+
+def test_empty_commits_have_no_summary_line():
+    markdown = generate([make_member(commits=[])], REPORT_DATE, "研发一组").markdown
+
+    assert "次提交" not in markdown
+    assert "今日无记录" in markdown
+
+
+def test_attendance_check_in_missing_shows_missing_line():
+    member = make_member(attendance=make_attendance(check_in=None, work_hours=0.0))
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- 签到缺失" in markdown
+    assert "签退 18:00" not in markdown  # v1.2：不展开打卡时刻

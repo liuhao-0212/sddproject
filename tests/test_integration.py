@@ -33,7 +33,8 @@ def make_cfg() -> dict:
             "lark_task": {"project_id": "p1"},
             "lark_msg": {"chat_id": "oc_test", "keywords": ["评审"]},
         },
-        "notifier": {"email": {"recipients": ["leader@company.com"]}},
+        "notifier": {"email": {"recipients": ["leader@company.com"]},
+                     "lark_bot": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}},
         "storage": {"db_path": "tmp/report.db"},
     }
 
@@ -219,7 +220,7 @@ def test_attendance_rendered_in_report(monkeypatch, env):
     assert rc == 0
     report = env["emails"][0][0]
     assert "### 工时统计" in report.markdown
-    assert "签到 09:00 / 签退 18:00，工时 9 小时（正常）" in report.markdown
+    assert "工时 9 小时（正常）" in report.markdown
     # 无考勤记录的成员同样标注"考勤数据暂不可用"（李四）
     assert report.markdown.count("考勤数据暂不可用") == 1
 
@@ -277,6 +278,70 @@ def test_push_failure_triggers_cross_channel_alert(monkeypatch, env):
 
     assert rc == 0
     assert len(env["alerts_lark"]) == 1  # 邮件失败 → 飞书告警（§6.1 备份通道）
+    assert env["alerts_email"] == []     # 飞书推送成功，无反向告警
+
+
+def test_lark_push_failure_triggers_email_alert(monkeypatch, env):
+    """飞书已配置但发送失败 → 触发邮件备份告警（§6.1 备份通道）。"""
+    stub_sources(monkeypatch, commits=[make_commit()])
+    monkeypatch.setattr(main.lark_bot_notifier, "send", lambda report, chat_id: False)
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert len(env["alerts_email"]) == 1
+    assert env["alerts_lark"] == []     # 邮件推送成功，无反向告警
+
+
+def test_both_channels_fail_trigger_cross_alerts(monkeypatch, env):
+    """两渠道均已配置且都失败 → 互为备份告警各一次。"""
+    stub_sources(monkeypatch, commits=[make_commit()])
+    monkeypatch.setattr(main.email_notifier, "send", lambda report, recipients: False)
+    monkeypatch.setattr(main.lark_bot_notifier, "send", lambda report, chat_id: False)
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert len(env["alerts_email"]) == 1
+    assert len(env["alerts_lark"]) == 1
+
+
+# ---------- v1.2：未配置的推送渠道跳过（不推送、不告警） ----------
+
+def test_unconfigured_channels_skip_push_and_alert(monkeypatch, env, caplog):
+    """未配置的渠道不推送、不触发备份告警，仅记一条 INFO 日志。"""
+    cfg = make_cfg()
+    cfg["notifier"]["email"]["recipients"] = []
+    cfg["notifier"].pop("lark_bot", None)
+    monkeypatch.setattr(main, "load_config", lambda: cfg)
+    monkeypatch.setenv("LARK_BOT_WEBHOOK_URL", "")
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    with caplog.at_level(logging.INFO):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert env["emails"] == []       # 未配置：不推送
+    assert env["larks"] == []
+    assert env["alerts_email"] == []  # 未配置：不触发备份告警
+    assert env["alerts_lark"] == []
+    assert "邮件渠道未配置" in caplog.text
+    assert "飞书渠道未配置" in caplog.text
+
+
+def test_email_unconfigured_lark_configured_pushes_only_lark(monkeypatch, env, caplog):
+    cfg = make_cfg()
+    cfg["notifier"]["email"]["recipients"] = []
+    monkeypatch.setattr(main, "load_config", lambda: cfg)
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert env["emails"] == []
+    assert len(env["larks"]) == 1   # 飞书已配置：正常推送
+    assert env["alerts_email"] == []
+    assert env["alerts_lark"] == []
 
 
 def test_dry_run_skips_push_and_storage(monkeypatch, env):
@@ -337,3 +402,43 @@ def test_collection_windows_are_tz_aware(monkeypatch, env):
     since = windows["github"][0]
     assert since.hour == 0 and since.minute == 0
     assert since == datetime.combine(REPORT_DATE, dtime.min, tzinfo=since.tzinfo)
+
+
+# ---------- 告警兜底：真实实现不得崩溃（extra 禁用保留字段 "message"） ----------
+
+def test_alert_email_logs_failure_without_crash(monkeypatch, caplog):
+    """邮件告警本身失败仅记录日志，不抛异常（直接测 _alert_email 真实实现）。"""
+    cfg = make_cfg()
+    sent: list = []
+    monkeypatch.setattr(main.email_notifier, "send",
+                        lambda report, recipients: (sent.append((report, recipients)),
+                                                    False)[1])
+    msg = "邮件推送失败，请检查邮件配置"
+
+    with caplog.at_level(logging.ERROR):
+        main._alert_email(cfg, REPORT_DATE, msg)  # 修复前：KeyError 覆盖保留字段
+
+    record = next(r for r in caplog.records if r.message == "告警邮件发送失败")
+    assert record.levelno == logging.ERROR
+    assert record.alert_message == msg  # extra 落在非保留字段，日志内容完整
+    assert len(sent) == 1
+    assert msg in sent[0][0].markdown    # 告警日报内容正确
+
+
+def test_alert_lark_logs_failure_without_crash(monkeypatch, caplog):
+    """飞书告警本身失败仅记录日志，不抛异常（直接测 _alert_lark 真实实现）。"""
+    cfg = make_cfg()
+    sent: list = []
+    monkeypatch.setattr(main.lark_bot_notifier, "send",
+                        lambda report, chat_id: (sent.append((report, chat_id)),
+                                                 False)[1])
+    msg = "飞书推送失败，请检查飞书机器人配置"
+
+    with caplog.at_level(logging.ERROR):
+        main._alert_lark(cfg, REPORT_DATE, msg)  # 修复前：KeyError 覆盖保留字段
+
+    record = next(r for r in caplog.records if r.message == "飞书告警发送失败")
+    assert record.levelno == logging.ERROR
+    assert record.alert_message == msg  # extra 落在非保留字段，日志内容完整
+    assert len(sent) == 1
+    assert msg in sent[0][0].markdown    # 告警日报内容正确
