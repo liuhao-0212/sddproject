@@ -13,13 +13,16 @@
 - 所有数据源失败时不生成空日报，记录错误日志并发送告警邮件
 - 推送渠道互为备份告警通道：邮件失败经飞书告警，飞书失败经邮件告警
 - 推送渠道未配置时跳过（不推送、不告警），仅「已配置且发送失败」触发备份告警（v1.2）
+- 采集源未配置/占位值时标记为「未接入」，跳过采集（不发无谓请求，v1.3）
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import date, datetime, time, timedelta
+from typing import Any
 
 import collector.github as github
 import collector.lark_attendance as lark_attendance
@@ -78,27 +81,53 @@ def _run(dry_run: bool) -> int:
     until = datetime.now(LOCAL_TZ)
 
     # 1) 采集：四个数据源相互独立，单源失败不阻断其他源
+    # v1.3：未配置/占位值的源标记为“未接入”，跳过采集（不发无谓请求）
     commits = github.collect(cfg["collector"]["github"]["repos"], since, until)
     logger.info("数据源采集完成", extra={"source": "github", "count": len(commits)})
-    tasks = lark_task.collect(cfg["collector"]["lark_task"]["project_id"], since, until)
-    logger.info("数据源采集完成", extra={"source": "lark_task", "count": len(tasks)})
-    messages = lark_msg.collect(cfg["collector"]["lark_msg"]["chat_id"],
-                                cfg["collector"]["lark_msg"]["keywords"], since, until)
-    logger.info("数据源采集完成", extra={"source": "lark_msg", "count": len(messages)})
-    # 考勤（v1.1）：失败经 CollectResult.error 显式返回（ADR-003），异常不得吞掉
-    attendance_result = lark_attendance.collect(today, today)
-    if attendance_result.success:
-        logger.info("数据源采集完成",
-                    extra={"source": "lark_attendance", "count": len(attendance_result.data)})
-    else:
-        logger.error("飞书考勤采集失败，日报将标注“考勤数据暂不可用”",
-                     extra={"reason": attendance_result.error})
 
+    tasks_collected = _is_configured(cfg["collector"]["lark_task"]["project_id"])
+    if tasks_collected:
+        tasks = lark_task.collect(cfg["collector"]["lark_task"]["project_id"], since, until)
+        logger.info("数据源采集完成", extra={"source": "lark_task", "count": len(tasks)})
+    else:
+        tasks = []
+        logger.info("飞书任务未配置，跳过采集", extra={"source": "lark_task"})
+
+    messages_collected = _is_configured(cfg["collector"]["lark_msg"]["chat_id"])
+    if messages_collected:
+        messages = lark_msg.collect(cfg["collector"]["lark_msg"]["chat_id"],
+                                    cfg["collector"]["lark_msg"]["keywords"], since, until)
+        logger.info("数据源采集完成", extra={"source": "lark_msg", "count": len(messages)})
+    else:
+        messages = []
+        logger.info("飞书消息未配置，跳过采集", extra={"source": "lark_msg"})
+
+    # 考勤（v1.1）：失败经 CollectResult.error 显式返回（ADR-003）；凭据缺失跳过采集
+    attendance_collected = bool(env("LARK_APP_ID")) and bool(env("LARK_APP_SECRET"))
+    if attendance_collected:
+        attendance_result = lark_attendance.collect(today, today)
+        if attendance_result.success:
+            logger.info("数据源采集完成",
+                        extra={"source": "lark_attendance", "count": len(attendance_result.data)})
+        else:
+            logger.error("飞书考勤采集失败，日报将标注“考勤数据暂不可用”",
+                         extra={"reason": attendance_result.error})
+    else:
+        attendance_result = None
+        logger.info("飞书考勤未配置，跳过采集", extra={"source": "lark_attendance"})
+
+    attendance_error = None
+    if attendance_collected:
+        attendance_error = None if attendance_result.success else attendance_result.error
+    else:
+        attendance_error = "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"
     source_errors = {
         "github": github.get_last_error(),
-        "lark_task": lark_task.get_last_error(),
-        "lark_msg": lark_msg.get_last_error(),
-        "lark_attendance": None if attendance_result.success else attendance_result.error,
+        "lark_task": lark_task.get_last_error() if tasks_collected
+                     else "飞书任务未配置（collector.lark_task.project_id 为空或占位值）",
+        "lark_msg": lark_msg.get_last_error() if messages_collected
+                    else "飞书消息未配置（collector.lark_msg.chat_id 为空或占位值）",
+        "lark_attendance": attendance_error,
     }
 
     # 2) 所有数据源均不可用：不生成空日报，记录错误日志 + 告警邮件（§6.1）
@@ -110,10 +139,10 @@ def _run(dry_run: bool) -> int:
 
     # 3) 聚合为成员报告（§3.3 成员身份映射）
     members = _aggregate(cfg, commits, tasks, messages,
-                         attendance_result.data, source_errors)
+                         attendance_result.data if attendance_result else [], source_errors)
 
-    # 4) 生成日报
-    report = generate(members, today, cfg["team_name"])
+    # 4) 生成日报（window 为采集窗口，用于头部“数据范围”，v1.3）
+    report = generate(members, today, cfg["team_name"], window=(since, until))
 
     if dry_run:
         logger.info("dry-run 模式：跳过推送与落库")
@@ -276,6 +305,29 @@ def _alert_lark(cfg: dict, today: date, message: str) -> None:
                                 cfg["collector"]["lark_msg"]["chat_id"])
     if not ok:
         logger.error("飞书告警发送失败", extra={"alert_message": message})
+
+
+_PLACEHOLDER_ALL_X = re.compile(r"[xX_]+")
+_PLACEHOLDER_OC_X = re.compile(r"oc_[xX]+")
+
+
+def _is_configured(value: Any) -> bool:
+    """数据源配置值是否有效（v1.3）：空/占位值视为未接入，跳过采集不发无谓请求。
+
+    占位值形态：空串、全 x（xxxx / oc_xxxxxxxx）、your-*/example 前缀、
+    含 placeholder/todo/none/null。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if any(word in lower for word in ("placeholder", "todo", "none", "null")):
+        return False
+    if _PLACEHOLDER_ALL_X.fullmatch(text) or _PLACEHOLDER_OC_X.fullmatch(text):
+        return False
+    if text.startswith("your-") or text.startswith("example"):
+        return False
+    return True
 
 
 def _email_recipients(cfg: dict) -> list[str]:

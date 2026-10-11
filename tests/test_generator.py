@@ -1,5 +1,6 @@
 """generator 单元测试（使用 Mock 数据）。"""
 
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -67,32 +68,36 @@ def test_generate_returns_dailyreport_with_all_fields():
     assert isinstance(report.html, str) and report.html
 
 
-def test_markdown_contains_three_section_titles():
+def test_markdown_contains_member_and_section_titles():
     report = generate([make_member()], REPORT_DATE, "研发一组")
     markdown = report.markdown
 
-    assert "# 研发一组 日报（2026-09-29）" in markdown
-    assert "## 张三" in markdown
-    assert "GitHub 用户名: zhangsan" in markdown
-    assert "### 代码提交" in markdown
-    assert "### 任务进展" in markdown
-    assert "### 协作沟通" in markdown
+    assert markdown.startswith("# 📊 研发一组日报")
+    assert "📅 2026-09-29 周二" in markdown
+    assert "## ▎今日概览" in markdown
+    assert "## ▎张三" in markdown
+    assert "### ▪ 代码提交" in markdown
+    assert "### ▪ 任务进展" in markdown
+    assert "### ▪ 工时统计" in markdown
+    assert "### ▪ 协作沟通" in markdown
+    assert "GitHub 用户名" not in markdown  # v1.3：不再展示内部标识行
 
 
 def test_markdown_renders_commits_with_stats():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-    assert "今日 1 次提交，共 +10 / -3 行" in markdown  # v1.2：板块开头汇总行
-    assert "feat: 登录页（+10/-3 行）— 08:30" in markdown
+    assert "· 今日 1 次提交，共 +10 / -3 行" in markdown
+    assert "· feat: 登录页（+10/-3 行）" in markdown
+    assert "— 08:30" not in markdown  # v1.3：提交只留标题 + 行数，不展示时间等细节
 
 
 def test_markdown_renders_tasks():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-    assert "实现登录页：未开始 → 进行中（10:00）" in markdown
+    assert "· 实现登录页：未开始 → 进行中（10:00）" in markdown
 
 
 def test_markdown_renders_messages():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-    assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
+    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
 
 
 def test_message_sender_displayed_as_member_name():
@@ -102,19 +107,19 @@ def test_message_sender_displayed_as_member_name():
         timestamp=datetime(2026, 9, 29, 10, 5, tzinfo=TZ), chat_name="团队群")])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
+    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
     assert "ou_zhangsan_openid" not in markdown  # 内部标识不进入日报正文
 
 
 def test_commit_renders_title_line_only():
-    """v1.2：只展示 commit 消息第一行（标题），正文与 Co-Authored-By 等 trailer 不进入日报。"""
+    """只展示 commit 消息第一行（标题），正文与 Co-Authored-By 等 trailer 不进入日报。"""
     member = make_member(commits=[CommitRecord(
         author="zhangsan",
         message="line1\nline2\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>",
         timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ), repo="org/repo")])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "line1（+0/-0 行）— 08:30" in markdown
+    assert "· line1（+0/-0 行）" in markdown
     assert "line2" not in markdown
     assert "Co-Authored-By" not in markdown
 
@@ -123,7 +128,7 @@ def test_empty_member_shows_no_records_today():
     member = make_member(commits=[], tasks=[], messages=[])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.count("今日无记录") == 3  # 三个板块各一条
+    assert markdown.count("· 今日无记录") == 3  # 三个板块各一条
 
 
 def test_source_failure_annotated_in_markdown():
@@ -154,9 +159,9 @@ def test_multiple_members_each_have_sections():
     markdown = generate([make_member(), make_member(name="李四", github_username="lisi",
                                                     commits=[], tasks=[], messages=[])],
                         REPORT_DATE, "研发一组").markdown
-    assert "## 张三" in markdown
-    assert "## 李四" in markdown
-    assert markdown.count("### 代码提交") == 2
+    assert "## ▎张三" in markdown
+    assert "## ▎李四" in markdown
+    assert markdown.count("### ▪ 代码提交") == 2
     assert "今日无记录" in markdown
 
 
@@ -164,10 +169,10 @@ def test_html_wellformed_and_renders_sections():
     html = generate([make_member()], REPORT_DATE, "研发一组").html
 
     assert html.startswith("<!DOCTYPE html>")
-    assert "<h1>研发一组 日报（2026-09-29）</h1>" in html
+    assert "<h1>📊 研发一组日报</h1>" in html
     assert "<title>研发一组 日报（2026-09-29）</title>" in html
-    assert "<h2>张三</h2>" in html
-    assert "<h3>代码提交</h3>" in html
+    assert "<h2>▎张三</h2>" in html
+    assert "<h3>▪ 代码提交</h3>" in html
     assert "<ul>" in html and "<li>" in html
 
 
@@ -193,16 +198,16 @@ def test_html_renders_failure_annotation():
 def test_attendance_section_between_tasks_and_messages():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.index("### 任务进展") < markdown.index("### 工时统计") \
-        < markdown.index("### 协作沟通")
+    assert markdown.index("### ▪ 任务进展") < markdown.index("### ▪ 工时统计") \
+        < markdown.index("### ▪ 协作沟通")
 
 
 def test_attendance_renders_work_hours_and_status():
     member = make_member(attendance=make_attendance())
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "### 工时统计" in markdown
-    assert "工时 9 小时（正常）" in markdown
+    assert "### ▪ 工时统计" in markdown
+    assert "· 工时 9 小时（正常）" in markdown
     assert "签到 09:00" not in markdown  # v1.2 简化：不展开签到/签退时刻
 
 
@@ -211,7 +216,7 @@ def test_attendance_late_status_rendered():
         check_in=datetime(2026, 9, 29, 9, 30, tzinfo=TZ), work_hours=8.5, status="迟到"))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "工时 8.5 小时（迟到）" in markdown
+    assert "· 工时 8.5 小时（迟到）" in markdown
 
 
 def test_attendance_missing_check_out_rendered():
@@ -219,7 +224,7 @@ def test_attendance_missing_check_out_rendered():
                                                      status="签退缺失"))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "- 签退缺失" in markdown
+    assert "· 签退缺失" in markdown
 
 
 def test_attendance_absent_without_punches_rendered():
@@ -227,7 +232,7 @@ def test_attendance_absent_without_punches_rendered():
                                                      work_hours=0.0, status="缺勤"))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "- 缺勤" in markdown
+    assert "· 缺勤" in markdown
 
 
 def test_attendance_unavailable_when_none():
@@ -256,52 +261,47 @@ def test_times_rendered_in_local_timezone(monkeypatch):
     monkeypatch.setattr(formatter, "LOCAL_TZ", timezone(timedelta(hours=8)))
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
-    assert "feat: 登录页（+10/-3 行）— 16:30" in markdown  # 08:30 UTC
-    assert "实现登录页：未开始 → 进行中（18:00）" in markdown                # 10:00 UTC
-    assert "[团队群] 张三：评审文档已上传（18:05）" in markdown              # 10:05 UTC
+    assert "· 实现登录页：未开始 → 进行中（18:00）" in markdown                # 10:00 UTC
+    assert "· [团队群] 张三：评审文档已上传（18:05）" in markdown              # 10:05 UTC
 
 
-# ---------- v1.2：数据源状态区与失败分级展示（proposal §3.5 / design.md §6.5） ----------
+# ---------- v1.2：板块简化（保留部分） ----------
 
-def test_source_status_section_lists_all_sources_with_counts():
-    member = make_member(attendance=make_attendance())
+def test_commit_summary_line_aggregates_totals():
+    def commit(message, additions, deletions, hour):
+        return CommitRecord(author="zhangsan", message=message,
+                            timestamp=datetime(2026, 9, 29, hour, 0, tzinfo=TZ),
+                            repo="org/repo", additions=additions, deletions=deletions,
+                            files_changed=1)
+    member = make_member(commits=[commit("feat: A", 10, 3, 8),
+                                  commit("fix: B", 20, 6, 9)])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.index("## 数据源状态") < markdown.index("## 张三")  # 位于日报顶部
-    assert "- ✅ GitHub：可用（1 条）" in markdown
-    assert "- ✅ 飞书任务：可用（1 条）" in markdown
-    assert "- ✅ 飞书考勤：可用（1 条）" in markdown
-    assert "- ✅ 飞书消息：可用（1 条）" in markdown
+    assert "· 今日 2 次提交，共 +30 / -9 行" in markdown
+    assert "· feat: A（+10/-3 行）" in markdown
+    assert "· fix: B（+20/-6 行）" in markdown
 
 
-def test_source_status_counts_aggregate_across_members():
-    members = [make_member(), make_member(name="李四", github_username="lisi",
-                                          commits=[], tasks=[], messages=[])]
-    markdown = generate(members, REPORT_DATE, "研发一组").markdown
+def test_commit_item_hides_repo_and_file_count():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
-    assert "- ✅ GitHub：可用（1 条）" in markdown
-    assert "- ✅ 飞书考勤：可用（0 条）" in markdown  # 仅统计有考勤记录的成员
+    assert "[org/repo]" not in markdown  # 不展示仓库全名
+    assert "个文件" not in markdown       # 不展示文件数
 
 
-def test_source_status_reflects_call_failure():
-    member = make_member(source_errors={"github": "请求超时"})
+def test_empty_commits_have_no_summary_line():
+    markdown = generate([make_member(commits=[])], REPORT_DATE, "研发一组").markdown
+
+    assert "次提交" not in markdown
+    assert "今日无记录" in markdown
+
+
+def test_attendance_check_in_missing_shows_missing_line():
+    member = make_member(attendance=make_attendance(check_in=None, work_hours=0.0))
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "- ⚠️ GitHub：调用失败" in markdown
-    assert "- ✅ 飞书任务：可用（1 条）" in markdown  # 其他源不受影响
-
-
-def test_not_configured_section_shows_one_liner():
-    """缺凭据 → 板块仅一句话"未接入，已跳过"，不含环境变量名等内部细节。"""
-    member = make_member(source_errors={
-        "lark_task": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
-    markdown = generate([member], REPORT_DATE, "研发一组").markdown
-
-    assert "- 未接入，已跳过" in markdown
-    assert "- － 飞书任务：未接入" in markdown
-    assert "LARK_APP_ID" not in markdown
-    assert "LARK_APP_SECRET" not in markdown
-    assert "实现登录页" not in markdown  # 失败板块不再渲染该源记录
+    assert "· 签到缺失" in markdown
+    assert "签退 18:00" not in markdown  # 不展开打卡时刻
 
 
 def test_call_failure_shows_single_line_short_reason():
@@ -327,79 +327,135 @@ def test_call_failure_filters_env_var_names():
     assert env_var not in markdown  # 环境变量名只进日志
 
 
-def test_attendance_not_configured_shows_skipped():
-    member = make_member(source_errors={
-        "lark_attendance": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
-    markdown = generate([member], REPORT_DATE, "研发一组").markdown
-
-    assert "- 未接入，已跳过" in markdown
-    assert "- － 飞书考勤：未接入" in markdown
-    assert "考勤数据暂不可用" not in markdown
-    assert "LARK_APP_ID" not in markdown
-
-
 def test_attendance_call_failure_keeps_unavailable_text():
     """考勤调用失败保持 v1.1 固定文案，原因只进日志不进正文。"""
     member = make_member(source_errors={"lark_attendance": "考勤接口超时"})
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "考勤数据暂不可用" in markdown
+    assert "· 考勤数据暂不可用" in markdown
     assert "超时" not in markdown
-    assert "- ⚠️ 飞书考勤：调用失败" in markdown
 
 
-def test_html_has_cards_and_status_badges():
+# ---------- v1.3：结构强化（头部 / 概览 / 落款；未接入不渲染） ----------
+
+def test_header_window_shows_data_range():
+    window = (datetime(2026, 9, 29, 0, 0, tzinfo=TZ),
+              datetime(2026, 9, 29, 18, 30, tzinfo=TZ))
+    markdown = generate([make_member()], REPORT_DATE, "研发一组", window=window).markdown
+
+    assert "📅 2026-09-29 周二" in markdown
+    assert "数据范围 00:00-18:30" in markdown
+
+
+def test_header_without_window_has_no_data_range():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "📅 2026-09-29 周二" in markdown
+    assert "数据范围" not in markdown
+
+
+def test_overview_summarizes_across_members():
+    members = [make_member(),
+               make_member(name="李四", github_username="lisi",
+                           commits=[], tasks=[], messages=[])]
+    markdown = generate(members, REPORT_DATE, "研发一组").markdown
+
+    assert markdown.index("## ▎今日概览") < markdown.index("## ▎张三")
+    assert "· 代码提交 1 次，共 +10 / -3 行" in markdown
+    assert "· 任务进展 1 项" in markdown
+    assert "· 协作沟通 1 条" in markdown
+    assert "· 工时统计 0 人，共 0 小时" in markdown
+
+
+def test_overview_sums_attendance_hours():
+    member = make_member(attendance=make_attendance())
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 工时统计 1 人，共 9 小时" in markdown
+
+
+def test_overview_excludes_unconfigured_sources():
+    """未接入的源整行不输出（design.md §6.5：概览与正文规则一致）。"""
+    member = make_member(source_errors={
+        "lark_task": "飞书任务未配置（collector.lark_task.project_id 为空或占位值）",
+        "lark_attendance": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- · 代码提交 1 次，共 +10 / -3 行" in markdown
+    assert "- · 协作沟通 1 条" in markdown
+    assert "- · 任务进展" not in markdown  # 未接入：整行不输出
+    assert "- · 工时统计" not in markdown
+
+
+def test_overview_shows_zero_for_configured_sources():
+    """已接入但为 0 的源仍显示（「0 项」「0 人」是有效信息）。"""
+    member = make_member(commits=[], tasks=[], messages=[])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "- · 任务进展 0 项" in markdown
+    assert "- · 工时统计 0 人，共 0 小时" in markdown
+
+
+def test_footer_contains_generator_and_sources():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "🤖 由「智能日报生成器」自动生成" in markdown
+    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in markdown
+    assert re.search(r"｜ 生成时间 \d{4}-\d{2}-\d{2} \d{2}:\d{2}", markdown)
+
+
+def test_footer_excludes_unconfigured_sources():
+    member = make_member(source_errors={
+        "lark_task": "飞书任务未配置（collector.lark_task.project_id 为空或占位值）"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "数据来源：GitHub、飞书考勤、飞书消息" in markdown
+    assert "▪ 任务进展" not in markdown  # 未接入：板块不渲染
+    assert "未接入" not in markdown      # 不出现任何未接入痕迹
+
+
+def test_unconfigured_source_section_not_rendered():
+    member = make_member(source_errors={
+        "lark_task": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "▪ 任务进展" not in markdown
+    assert "LARK_APP_ID" not in markdown
+    assert "LARK_APP_SECRET" not in markdown
+    assert "实现登录页" not in markdown  # 该源记录不渲染
+
+
+def test_configured_source_failure_still_shown():
+    member = make_member(source_errors={"github": "请求超时"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "▪ 代码提交" in markdown  # 已接入但失败：板块必须显示（§6.1 严禁静默跳过）
+    assert "**数据获取失败**（GitHub采集异常：请求超时）" in markdown
+
+
+def test_github_username_line_removed():
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "GitHub 用户名" not in markdown
+    assert "zhangsan" not in markdown  # 内部标识不进入正文
+
+
+def test_html_has_header_overview_and_footer():
     html = generate([make_member()], REPORT_DATE, "研发一组").html
 
-    assert '<section class="card status-card">' in html
+    assert '<header class="report-head">' in html
+    assert '<section class="card overview-card">' in html
     assert '<section class="card member-card">' in html
-    assert '<span class="badge badge-ok">✅ GitHub：可用（1 条）</span>' in html
+    assert '<footer class="report-foot">' in html
+    assert "🤖 由「智能日报生成器」自动生成" in html
+    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in html
 
 
-def test_html_not_configured_renders_off_badge_without_internals():
+def test_html_unconfigured_source_section_absent():
     member = make_member(source_errors={
         "lark_task": "飞书应用凭据未配置（环境变量 LARK_APP_ID / LARK_APP_SECRET）"})
     html = generate([member], REPORT_DATE, "研发一组").html
 
-    assert '<span class="badge badge-off">－ 飞书任务：未接入</span>' in html
+    assert "▪ 任务进展" not in html
     assert "LARK_APP_ID" not in html
     assert "LARK_APP_SECRET" not in html
-
-
-# ---------- v1.2：代码提交与工时统计板块简化 ----------
-
-def test_commit_summary_line_aggregates_totals():
-    def commit(message, additions, deletions, hour):
-        return CommitRecord(author="zhangsan", message=message,
-                            timestamp=datetime(2026, 9, 29, hour, 0, tzinfo=TZ),
-                            repo="org/repo", additions=additions, deletions=deletions,
-                            files_changed=1)
-    member = make_member(commits=[commit("feat: A", 10, 3, 8),
-                                  commit("fix: B", 20, 6, 9)])
-    markdown = generate([member], REPORT_DATE, "研发一组").markdown
-
-    assert "今日 2 次提交，共 +30 / -9 行" in markdown
-    assert "feat: A（+10/-3 行）— 08:00" in markdown
-    assert "fix: B（+20/-6 行）— 09:00" in markdown
-
-
-def test_commit_item_hides_repo_and_file_count():
-    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-
-    assert "[org/repo]" not in markdown  # v1.2：不再展示仓库全名
-    assert "个文件" not in markdown       # v1.2：不再展示文件数
-
-
-def test_empty_commits_have_no_summary_line():
-    markdown = generate([make_member(commits=[])], REPORT_DATE, "研发一组").markdown
-
-    assert "次提交" not in markdown
-    assert "今日无记录" in markdown
-
-
-def test_attendance_check_in_missing_shows_missing_line():
-    member = make_member(attendance=make_attendance(check_in=None, work_hours=0.0))
-    markdown = generate([member], REPORT_DATE, "研发一组").markdown
-
-    assert "- 签到缺失" in markdown
-    assert "签退 18:00" not in markdown  # v1.2：不展开打卡时刻

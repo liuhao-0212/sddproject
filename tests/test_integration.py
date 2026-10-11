@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 import time
 from datetime import date, datetime, time as dtime, timezone
 
@@ -105,6 +106,9 @@ def env(monkeypatch):
 
     monkeypatch.setattr(main, "date", _FakeDate)
     monkeypatch.setattr(main, "load_config", make_cfg)
+    # v1.3：飞书凭据存在时考勤才会采集；默认视为已配置（跳过采集的场景专项测试覆盖）
+    monkeypatch.setenv("LARK_APP_ID", "cli_test")
+    monkeypatch.setenv("LARK_APP_SECRET", "sec_test")
     monkeypatch.setattr(main.email_notifier, "send",
                         lambda report, recipients: (state["emails"].append(
                             (report, recipients)), True)[1])
@@ -146,12 +150,18 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
     report = env["emails"][0][0]
     assert report.date == REPORT_DATE
     assert report.team_name == "研发一组"
-    assert "## 张三" in report.markdown
+    # v1.3 结构：头部（含数据范围）→ 今日概览 → ▎成员 → ▪板块 → 落款
+    assert report.markdown.startswith("# 📊 研发一组日报")
+    assert "📅 2026-09-29 周二" in report.markdown
+    assert re.search(r"数据范围 \d{2}:\d{2}-\d{2}:\d{2}", report.markdown)  # window 已传入
+    assert "## ▎今日概览" in report.markdown
+    assert "## ▎张三" in report.markdown
     for title in ("代码提交", "任务进展", "工时统计", "协作沟通"):
-        assert f"### {title}" in report.markdown
+        assert f"### ▪ {title}" in report.markdown
     assert "feat: 登录页" in report.markdown
     assert "实现登录页：未开始 → 进行中" in report.markdown
-    assert "[团队群] 张三：评审文档已上传" in report.markdown  # 发送者展示成员姓名（§6.5 易读）
+    assert "[团队群] 张三：评审文档已上传" in report.markdown
+    assert "🤖 由「智能日报生成器」自动生成" in report.markdown  # 发送者展示成员姓名（§6.5 易读）
     # 推送成功，无任何告警
     assert env["alerts_email"] == []
     assert env["alerts_lark"] == []
@@ -189,7 +199,7 @@ def test_empty_member_shows_no_records_today(monkeypatch, env):
     report = env["emails"][0][0]
     assert "今日无记录" in report.markdown  # 李四段落
     assert "feat: 登录页" in report.markdown  # 张三正常
-    assert "## 李四" in report.markdown
+    assert "## ▎李四" in report.markdown
 
 
 # ---------- 4. 全部失败场景 ----------
@@ -219,7 +229,7 @@ def test_attendance_rendered_in_report(monkeypatch, env):
 
     assert rc == 0
     report = env["emails"][0][0]
-    assert "### 工时统计" in report.markdown
+    assert "### ▪ 工时统计" in report.markdown
     assert "工时 9 小时（正常）" in report.markdown
     # 无考勤记录的成员同样标注"考勤数据暂不可用"（李四）
     assert report.markdown.count("考勤数据暂不可用") == 1
@@ -442,3 +452,59 @@ def test_alert_lark_logs_failure_without_crash(monkeypatch, caplog):
     assert record.alert_message == msg  # extra 落在非保留字段，日志内容完整
     assert len(sent) == 1
     assert msg in sent[0][0].markdown    # 告警日报内容正确
+
+
+# ---------- v1.3：未配置/占位值的源跳过采集，板块不渲染 ----------
+
+def test_unconfigured_lark_sources_skipped_and_hidden(monkeypatch, env):
+    """占位值配置的源跳过采集（不发无谓请求），日报中该板块不渲染。"""
+    cfg = make_cfg()
+    cfg["collector"]["lark_task"]["project_id"] = "your-lark-project-id"
+    cfg["collector"]["lark_msg"]["chat_id"] = "oc_xxxxxxxx"
+    monkeypatch.setattr(main, "load_config", lambda: cfg)
+    calls = {"lark_task": 0, "lark_msg": 0, "lark_attendance": 0}
+    monkeypatch.setattr(main.github, "collect", lambda repos, since, until: [make_commit()])
+    monkeypatch.setattr(main.github, "get_last_error", lambda: None)
+    monkeypatch.setattr(main.lark_task, "collect",
+                        lambda project_id, since, until: (calls.__setitem__("lark_task", 1), [])[1])
+    monkeypatch.setattr(main.lark_task, "get_last_error", lambda: None)
+    monkeypatch.setattr(main.lark_msg, "collect",
+                        lambda chat_id, keywords, since, until: (calls.__setitem__("lark_msg", 1), [])[1])
+    monkeypatch.setattr(main.lark_msg, "get_last_error", lambda: None)
+    monkeypatch.setattr(main.lark_attendance, "collect",
+                        lambda since, until: (calls.__setitem__("lark_attendance", 1),
+                                              CollectResult(True, [], None))[1])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert calls == {"lark_task": 0, "lark_msg": 0, "lark_attendance": 1}  # 占位源不发请求
+    report = env["emails"][0][0]
+    assert "▪ 代码提交" in report.markdown
+    assert "▪ 任务进展" not in report.markdown
+    assert "▪ 协作沟通" not in report.markdown
+    assert "未接入" not in report.markdown
+    assert "- · 任务进展" not in report.markdown          # 概览同样剔除未接入的源
+    assert "- · 工时统计 0 人，共 0 小时" in report.markdown  # 已接入但为 0 仍显示
+    assert "数据来源：GitHub、飞书考勤" in report.markdown  # 落款剔除未接入的源
+
+
+def test_unconfigured_attendance_skipped_and_hidden(monkeypatch, env):
+    """飞书凭据缺失时跳过考勤采集（不发请求），工时统计板块不渲染。"""
+    monkeypatch.setenv("LARK_APP_ID", "")
+    monkeypatch.setenv("LARK_APP_SECRET", "")
+    calls = {"lark_attendance": 0}
+    monkeypatch.setattr(main.lark_attendance, "collect",
+                        lambda since, until: (calls.__setitem__("lark_attendance", 1),
+                                              CollectResult(True, [], None))[1])
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert calls["lark_attendance"] == 0  # 凭据缺失：不发请求
+    report = env["emails"][0][0]
+    assert "▪ 工时统计" not in report.markdown
+    assert "考勤数据暂不可用" not in report.markdown
+    assert "- · 工时统计" not in report.markdown  # 概览同样剔除未接入的源
+    assert "数据来源：GitHub、飞书任务、飞书消息" in report.markdown
