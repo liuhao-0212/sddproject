@@ -406,3 +406,27 @@ def test_chat_name_fetch_failure_falls_back_to_chat_id(monkeypatch, caplog):
     assert len(records) == 1
     assert records[0].chat_name == "oc_test"
     assert "使用 chat_id 作为群名称" in caplog.text
+
+
+# ---------- v1.2：分页参数上限（design.md §4.1 接口契约） ----------
+
+def test_message_request_page_size_within_api_limit(monkeypatch):
+    """GET /im/v1/messages 的 page_size 上限为 50（超过返回 400，已实测）。"""
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        if request.url.path == CHAT_PATH:
+            return chat_response()
+        if request.url.path == MSG_PATH:
+            seen.update(dict(request.url.params))
+            return messages_response([msg_item()])
+        raise AssertionError(f"意外的请求: {request.url}")
+
+    install(monkeypatch, handler)
+    records = lark_msg.collect("oc_test", KEYWORDS, BASE_TIME, END_TIME)
+
+    assert records
+    assert int(seen["page_size"]) <= 50  # im/v1/messages 官方上限
+    assert int(seen["page_size"]) == lark_msg.PAGE_SIZE

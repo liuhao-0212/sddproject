@@ -151,7 +151,7 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
         assert f"### {title}" in report.markdown
     assert "feat: 登录页" in report.markdown
     assert "实现登录页：未开始 → 进行中" in report.markdown
-    assert "[团队群] zhangsan@company.com：评审文档已上传" in report.markdown
+    assert "[团队群] 张三：评审文档已上传" in report.markdown  # 发送者展示成员姓名（§6.5 易读）
     # 推送成功，无任何告警
     assert env["alerts_email"] == []
     assert env["alerts_lark"] == []

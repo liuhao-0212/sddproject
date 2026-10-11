@@ -16,7 +16,7 @@ API 流程（测试中以 httpx.MockTransport 打桩，见 tests/test_attendance
 2. POST /attendance/v1/user_stats_data/query 分页拉取员工日度考勤统计
    请求体: {"employee_type": "email", "employee_ids": [...],
             "begin_date": "yyyyMMdd", "end_date": "yyyyMMdd",
-            "page_token": "", "page_size": 100}
+            "page_token": "", "page_size": 50}
    响应:  data.user_stats_data 每项含
              employee_id 员工标识 | date 考勤日期（yyyyMMdd）
              check_in / check_out 毫秒时间戳（缺失时为 null/空）
@@ -45,7 +45,6 @@ import httpx
 from collector._lark import (
     BASE_URL,
     MAX_PAGES,
-    PAGE_SIZE,
     TokenManager,
     get_lark_client,
     parse_time,
@@ -58,6 +57,9 @@ from shared.logger import get_logger
 logger = get_logger("collector.lark_attendance")
 
 ATTENDANCE_URL = f"{BASE_URL}/attendance/v1/user_stats_data/query"
+# POST /attendance/v1/user_stats_data/query 的 page_size：旧版文档已下架无法复核，
+# 考勤系列分页接口上限均为 1~50，取保守值 50（若实际允许更大值同样合法）
+PAGE_SIZE = 50
 # 成员标识类型：config.yaml members[].lark 存放的是飞书用户邮箱（design.md §3.3）
 EMPLOYEE_TYPE = "email"
 

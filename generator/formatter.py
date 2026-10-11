@@ -195,7 +195,9 @@ def _render_messages(member: MemberReport) -> list[str]:
     lines = []
     for message in sorted(member.messages, key=lambda m: m.timestamp):
         content = message.content.replace("\n", " ").strip()
-        lines.append(f"- [{message.chat_name}] {message.sender}：{content}"
+        # 消息已按发送者归入成员（编排层按 sender 匹配），sender 原值多为 open_id 等
+        # 内部标识，展示统一用成员姓名（design.md §6.5：面向非技术读者，易读）
+        lines.append(f"- [{message.chat_name}] {member.name}：{content}"
                      f"（{_local(message.timestamp):%H:%M}）")
     lines.append("")
     return lines

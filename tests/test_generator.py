@@ -95,6 +95,17 @@ def test_markdown_renders_messages():
     assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
 
 
+def test_message_sender_displayed_as_member_name():
+    """sender 原值多为 open_id 等内部标识，展示统一用成员姓名（design.md §6.5 易读）。"""
+    member = make_member(messages=[MessageRecord(
+        sender="ou_zhangsan_openid", content="评审文档已上传",
+        timestamp=datetime(2026, 9, 29, 10, 5, tzinfo=TZ), chat_name="团队群")])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "[团队群] 张三：评审文档已上传（10:05）" in markdown
+    assert "ou_zhangsan_openid" not in markdown  # 内部标识不进入日报正文
+
+
 def test_commit_renders_title_line_only():
     """v1.2：只展示 commit 消息第一行（标题），正文与 Co-Authored-By 等 trailer 不进入日报。"""
     member = make_member(commits=[CommitRecord(

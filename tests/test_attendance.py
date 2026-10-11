@@ -103,7 +103,7 @@ def test_collect_returns_collectresult_with_all_fields(monkeypatch):
         "employee_ids": ["ou_1", "ou_2"],
         "begin_date": "20260929",
         "end_date": "20260929",
-        "page_size": 100,
+        "page_size": 50,
     }]
 
 
@@ -366,3 +366,26 @@ def test_unparseable_date_skipped(monkeypatch, caplog):
     assert result.success is True
     assert result.data == []
     assert "日期解析失败" in caplog.text
+
+
+# ---------- v1.2：分页参数上限（design.md §4.1 接口契约） ----------
+
+def test_attendance_request_page_size_within_api_limit(monkeypatch):
+    """POST /attendance/v1/user_stats_data/query 的 page_size 取保守值 50
+    （考勤系列分页接口上限为 1~50）。"""
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        if request.url.path == ATTENDANCE_PATH:
+            bodies.append(json.loads(request.content))
+            return attendance_response([stats_item()])
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    install(monkeypatch, handler)
+    result = lark.collect(SINCE, UNTIL)
+
+    assert result.success is True
+    assert bodies[0]["page_size"] <= 50
+    assert bodies[0]["page_size"] == lark.PAGE_SIZE

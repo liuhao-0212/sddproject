@@ -33,7 +33,6 @@ import httpx
 from collector._lark import (
     BASE_URL,
     MAX_PAGES,
-    PAGE_SIZE,
     TokenManager,
     get_lark_client,
     parse_time,
@@ -57,6 +56,8 @@ def get_last_error() -> str | None:
 
 CHAT_URL = f"{BASE_URL}/im/v1/chats"
 MESSAGE_LIST_URL = f"{BASE_URL}/im/v1/messages"
+# im/v1/messages（获取会话历史消息）的 page_size 官方上限为 50，超过返回 400
+PAGE_SIZE = 50
 # 配置读取路径（测试中可替换）
 CONFIG_PATH = "config.yaml"
 # 敏感词兜底默认值（design.md §6.2：薪资/绩效/裁员等；配置缺失时兜底，绝不放行）

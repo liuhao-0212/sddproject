@@ -27,7 +27,6 @@ import httpx
 from collector._lark import (
     BASE_URL,
     MAX_PAGES,
-    PAGE_SIZE,
     TokenManager,
     get_lark_client,
     parse_time,
@@ -50,6 +49,11 @@ def get_last_error() -> str | None:
 
 
 TASK_LIST_URL = f"{BASE_URL}/task/v1/tasks"
+# 各接口的 page_size 上限不同（design.md §4.1 接口契约），分别定义：
+# - GET /task/v1/tasks 官方上限 100（超限报 1470421 "page_size exceed 100"）
+# - GET /task/v1/tasks/{id}/activity 官方文档未公开上限，取保守值 50（单页足够覆盖单日状态变更）
+TASK_LIST_PAGE_SIZE = 100
+TASK_ACTIVITY_PAGE_SIZE = 50
 
 
 @dataclass
@@ -114,7 +118,7 @@ def _fetch_tasks(client: httpx.Client, tokens: TokenManager,
     tasks: list[tuple[str, str, str]] = []
     page_token: str | None = None
     for _ in range(MAX_PAGES):
-        params: dict[str, Any] = {"project_id": project_id, "page_size": PAGE_SIZE}
+        params: dict[str, Any] = {"project_id": project_id, "page_size": TASK_LIST_PAGE_SIZE}
         if page_token:
             params["page_token"] = page_token
         data = request_with_token(client, tokens, "GET", TASK_LIST_URL, params=params)
@@ -144,7 +148,7 @@ def _fetch_status_changes(client: httpx.Client, tokens: TokenManager, task_id: s
     try:
         data = request_with_token(client, tokens, "GET",
                                   f"{TASK_LIST_URL}/{task_id}/activity",
-                                  params={"page_size": PAGE_SIZE})
+                                  params={"page_size": TASK_ACTIVITY_PAGE_SIZE})
     except CollectorError as exc:
         logger.warning("飞书任务动态获取失败，跳过该任务",
                        extra={"task_id": task_id, "reason": str(exc)})

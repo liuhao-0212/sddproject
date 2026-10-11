@@ -347,3 +347,31 @@ def test_unexpected_exception_does_not_escape_collect(monkeypatch, caplog):
     assert records == []
     assert lark.get_last_error() is not None
     assert "未预期异常" in caplog.text
+
+
+# ---------- v1.2：分页参数上限（design.md §4.1 接口契约） ----------
+
+def test_task_request_page_sizes_within_api_limits(monkeypatch):
+    """task/v1/tasks 列表上限 100（官方校验规则）；task activity 取保守值 50。"""
+    list_params: dict[str, str] = {}
+    activity_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == TOKEN_PATH:
+            return token_response()
+        if request.url.path == TASK_PATH:
+            list_params.update(dict(request.url.params))
+            return tasks_response([task_item("task-1")])
+        if request.url.path.endswith("/activity"):
+            activity_params.update(dict(request.url.params))
+            return activity_response([status_item()])
+        raise AssertionError(f"意外的请求: {request.url}")
+
+    install(monkeypatch, handler)
+    records = lark.collect("proj-001", BASE_TIME, END_TIME)
+
+    assert records
+    assert int(list_params["page_size"]) <= 100      # GET /task/v1/tasks 官方上限 100
+    assert int(activity_params["page_size"]) <= 50   # task activity 取保守值 50
+    assert int(list_params["page_size"]) == lark.TASK_LIST_PAGE_SIZE
+    assert int(activity_params["page_size"]) == lark.TASK_ACTIVITY_PAGE_SIZE

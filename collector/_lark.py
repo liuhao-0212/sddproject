@@ -19,7 +19,8 @@ logger = get_logger("collector.lark")
 BASE_URL = "https://open.feishu.cn/open-apis"
 TOKEN_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
 DEFAULT_TIMEOUT = 30.0   # 单次请求超时（秒）
-PAGE_SIZE = 100
+# 注意：各飞书 API 的 page_size 上限不同（如 im/v1/messages 上限 50、
+# task/v1/tasks 上限 100），由各采集模块定义自己的常量，不得共用。
 MAX_PAGES = 20           # 分页安全上限
 MAX_RETRIES = 3          # 超时后最多重试次数（不含首次尝试）
 RETRY_INTERVAL = 5.0     # 超时重试间隔（秒）
