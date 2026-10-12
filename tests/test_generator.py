@@ -72,7 +72,7 @@ def test_markdown_contains_member_and_section_titles():
     report = generate([make_member()], REPORT_DATE, "研发一组")
     markdown = report.markdown
 
-    assert markdown.startswith("# 📊 研发一组日报")
+    assert markdown.startswith("# 📊 研发一组 智能日报")
     assert "📅 2026-09-29 周二" in markdown
     assert "## ▎今日概览" in markdown
     assert "## ▎张三" in markdown
@@ -169,8 +169,8 @@ def test_html_wellformed_and_renders_sections():
     html = generate([make_member()], REPORT_DATE, "研发一组").html
 
     assert html.startswith("<!DOCTYPE html>")
-    assert "<h1>📊 研发一组日报</h1>" in html
-    assert "<title>研发一组 日报（2026-09-29）</title>" in html
+    assert "<h1>📊 研发一组 智能日报</h1>" in html
+    assert "<title>研发一组 智能日报（2026-09-29）</title>" in html
     assert "<h2>▎张三</h2>" in html
     assert "<h3>▪ 代码提交</h3>" in html
     assert "<ul>" in html and "<li>" in html

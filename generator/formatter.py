@@ -40,6 +40,9 @@ NO_RECORDS_TEXT = "今日无记录"
 FAILURE_TEXT = "数据获取失败"
 ATTENDANCE_UNAVAILABLE_TEXT = "考勤数据暂不可用"
 
+# 报告名称：头部标题 / HTML 页面标题 / 邮件主题 / 飞书卡片标题共用（一处定义、多处使用）
+REPORT_NAME = "智能日报"
+
 # 「未接入」（缺凭据/未授权/占位值）判定关键词（design.md §6.5）：与采集层的权威错误文案
 # 及编排层跳过采集时填充的原因对齐；命中时板块整体不渲染（v1.3），原因只进日志。
 NOT_CONFIGURED_KEYWORDS = ("凭据未配置", "未配置", "未授权", "缺少飞书用户标识")
@@ -119,7 +122,7 @@ def _build_markdown(members: list[MemberReport], report_date: date, team_name: s
 def _render_header(team_name: str, report_date: date,
                    window: tuple[datetime, datetime] | None) -> list[str]:
     """头部（v1.3）：📊 标题·团队名；📅 日期含星期；数据范围 HH:MM-HH:MM。"""
-    lines = [f"# 📊 {team_name}日报", ""]
+    lines = [f"# 📊 {team_name} {REPORT_NAME}", ""]
     meta = f"📅 {report_date.isoformat()} {WEEKDAYS[report_date.weekday()]}"
     if window:
         since, until = window

@@ -112,7 +112,7 @@ def test_send_success_returns_true_and_sends_html(monkeypatch, tmp_path):
     assert ("login", "report@company.com", "secret") in server.calls
 
     parsed = email.message_from_string(server.sent[0], policy=email.policy.default)
-    assert parsed["Subject"] == "研发一组 日报（2026-09-29）"  # 主题含团队名与日期
+    assert parsed["Subject"] == "研发一组 智能日报（2026-09-29）"  # 主题含团队名、报告名与日期
     assert parsed["From"] == "report@company.com"
     assert parsed["To"] == "leader@company.com"
     assert parsed.get_content_type() == "text/html"

@@ -15,7 +15,7 @@ import smtplib
 import time
 from email.message import EmailMessage
 
-from generator import DailyReport
+from generator import REPORT_NAME, DailyReport
 from shared.config import env, load_config
 from shared.errors import NotifierError
 from shared.logger import get_logger
@@ -86,7 +86,7 @@ def _smtp_config() -> tuple[str, int, str, str, str]:
 def _build_message(report: DailyReport, recipients: list[str], sender: str) -> EmailMessage:
     """构造 HTML 邮件：主题含日期与团队名称，正文为 report.html。"""
     msg = EmailMessage()
-    msg["Subject"] = f"{report.team_name} 日报（{report.date.isoformat()}）"
+    msg["Subject"] = f"{report.team_name} {REPORT_NAME}（{report.date.isoformat()}）"
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     msg.set_content(report.html, subtype="html")

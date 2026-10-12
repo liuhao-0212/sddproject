@@ -151,7 +151,7 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
     assert report.date == REPORT_DATE
     assert report.team_name == "研发一组"
     # v1.3 结构：头部（含数据范围）→ 今日概览 → ▎成员 → ▪板块 → 落款
-    assert report.markdown.startswith("# 📊 研发一组日报")
+    assert report.markdown.startswith("# 📊 研发一组 智能日报")
     assert "📅 2026-09-29 周二" in report.markdown
     assert re.search(r"数据范围 \d{2}:\d{2}-\d{2}:\d{2}", report.markdown)  # window 已传入
     assert "## ▎今日概览" in report.markdown

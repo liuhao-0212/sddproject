@@ -70,8 +70,8 @@ def test_send_success_returns_true_and_sends_markdown(monkeypatch, tmp_path):
     element = payload["card"]["elements"][0]
     assert element["tag"] == "markdown"
     assert element["content"] == make_report().markdown
-    assert "研发一组" in payload["card"]["header"]["title"]["content"]
-    assert "2026-09-29" in payload["card"]["header"]["title"]["content"]
+    # 卡片标题格式：{team_name} 智能日报（日期）
+    assert payload["card"]["header"]["title"]["content"] == "研发一组 智能日报（2026-09-29）"
 
 
 def test_send_accepts_v1_webhook_response(monkeypatch, tmp_path):

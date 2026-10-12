@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from generator import DailyReport
+from generator import REPORT_NAME, DailyReport
 from shared.config import env, load_config
 from shared.errors import NotifierError
 from shared.logger import get_logger
@@ -90,7 +90,7 @@ def _build_payload(report: DailyReport) -> dict[str, Any]:
         "card": {
             "header": {
                 "title": {"tag": "plain_text",
-                          "content": f"{report.team_name} 日报（{report.date.isoformat()}）"},
+                          "content": f"{report.team_name} {REPORT_NAME}（{report.date.isoformat()}）"},
                 "template": "blue",
             },
             "elements": [{"tag": "markdown", "content": report.markdown}],

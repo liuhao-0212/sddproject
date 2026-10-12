@@ -58,8 +58,8 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
 
 def render_html(markdown: str, report_date: date, team_name: str) -> str:
     """将 Markdown 日报转换为完整 HTML 页面（v1.3：头部卡 + 概览卡 + 成员卡 + 落款）。"""
-    from generator.formatter import markdown_to_html  # 延迟导入避免循环依赖
-    title = f"{team_name} 日报（{report_date.isoformat()}）"
+    from generator.formatter import REPORT_NAME, markdown_to_html  # 延迟导入避免循环依赖
+    title = f"{team_name} {REPORT_NAME}（{report_date.isoformat()}）"
     return _PAGE_TEMPLATE.render(title=title,
                                  content=_layout_sections(markdown_to_html(markdown)))
 
