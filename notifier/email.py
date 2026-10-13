@@ -2,7 +2,8 @@
 
 接口契约: send(report, recipients) -> bool
 
-- 邮件主题包含日期与团队名称；正文为 report.html
+- 邮件主题为「{org_name} {team_name} {date} 智能日报」（org_name 未配置时省略前缀）；
+  正文为 report.html
 - 发送失败重试 2 次，仍失败返回 False + 错误日志（design.md §6.1；
   跨渠道告警由编排层 main.py 负责）
 - SMTP 服务器地址/端口读 config.yaml 的 notifier.email 段；
@@ -40,12 +41,12 @@ def send(report: DailyReport, recipients: list[str]) -> bool:
         logger.error("邮件推送失败：收件人为空")
         return False
     try:
-        host, port, user, password, sender = _smtp_config()
+        host, port, user, password, sender, org_name = _smtp_config()
     except Exception as exc:  # 配置不可用同样降级为推送失败（§6.1）
         logger.error("邮件推送失败：SMTP 配置不可用",
                      extra={"path": CONFIG_PATH, "reason": str(exc)}, exc_info=exc)
         return False
-    message = _build_message(report, recipients, sender)
+    message = _build_message(report, recipients, sender, org_name)
 
     attempt = 0
     while True:
@@ -69,8 +70,9 @@ def send(report: DailyReport, recipients: list[str]) -> bool:
     return True
 
 
-def _smtp_config() -> tuple[str, int, str, str, str]:
-    """返回 (host, port, user, password, sender)。host/port 读配置，凭据读环境变量。"""
+def _smtp_config() -> tuple[str, int, str, str, str, str]:
+    """返回 (host, port, user, password, sender, org_name)。
+    host/port 与 org_name 读配置，凭据读环境变量。"""
     cfg = load_config(CONFIG_PATH)
     email_cfg = cfg.get("notifier", {}).get("email", {})
     host = str(email_cfg.get("smtp_host") or "")
@@ -80,13 +82,18 @@ def _smtp_config() -> tuple[str, int, str, str, str]:
     user = env("SMTP_USER")
     password = env("SMTP_PASSWORD")
     sender = env("SMTP_FROM") or user or "daily-report@localhost"
-    return host, int(port), user, password, sender
+    org_name = str(cfg.get("org_name") or "")  # config.py 已按可选字段归一化（默认空串）
+    return host, int(port), user, password, sender, org_name
 
 
-def _build_message(report: DailyReport, recipients: list[str], sender: str) -> EmailMessage:
-    """构造 HTML 邮件：主题含日期与团队名称，正文为 report.html。"""
+def _build_message(report: DailyReport, recipients: list[str], sender: str,
+                   org_name: str = "") -> EmailMessage:
+    """构造 HTML 邮件：主题「{org_name} {team_name} {date} 智能日报」
+    （org_name 为空时省略前缀），正文为 report.html。"""
+    parts = [part for part in (org_name, report.team_name,
+                               report.date.isoformat(), REPORT_NAME) if part]
     msg = EmailMessage()
-    msg["Subject"] = f"{report.team_name} {REPORT_NAME}（{report.date.isoformat()}）"
+    msg["Subject"] = " ".join(parts)
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     msg.set_content(report.html, subtype="html")

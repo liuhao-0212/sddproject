@@ -68,8 +68,9 @@ def make_factory(per_instance_failures=None):
 
 
 def install(monkeypatch, tmp_path, factory=None, record_sleep=False, port=465,
-            with_creds=True, with_from=True):
-    """注入 SMTP 配置（tmp config.yaml）、凭据环境变量与假服务器工厂。"""
+            with_creds=True, with_from=True, org_name=None):
+    """注入 SMTP 配置（tmp config.yaml）、凭据环境变量与假服务器工厂。
+    org_name 为 None 时不写入（模拟未配置组织标签）。"""
     sleeps: list[float] = []
     if with_creds:
         monkeypatch.setenv("SMTP_USER", "report@company.com")
@@ -93,6 +94,8 @@ def install(monkeypatch, tmp_path, factory=None, record_sleep=False, port=465,
         "notifier": {"email": {"smtp_host": "smtp.company.com", "smtp_port": port,
                                "recipients": ["leader@company.com"]}},
     }
+    if org_name is not None:
+        cfg["org_name"] = org_name
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
     monkeypatch.setattr(email_mod, "CONFIG_PATH", str(path))
@@ -118,11 +121,35 @@ def test_send_success_returns_true_and_sends_html(monkeypatch, tmp_path):
     assert ("login", "report@company.com", "secret") in server.calls
 
     parsed = email.message_from_string(server.sent[0], policy=email.policy.default)
-    assert parsed["Subject"] == "研发一组 智能日报（2026-09-29）"  # 主题含团队名、报告名与日期
+    assert parsed["Subject"] == "研发一组 2026-09-29 智能日报"  # 无 org_name：退化为「团队 日期 智能日报」
     assert parsed["From"] == "report@company.com"
     assert parsed["To"] == "leader@company.com"
     assert parsed.get_content_type() == "text/html"
     assert make_report().html in parsed.get_content()
+
+
+def test_subject_format_with_org_name(monkeypatch, tmp_path):
+    """配置了 org_name：主题为「{org_name} {team_name} {date} 智能日报」。"""
+    factory = make_factory()
+    install(monkeypatch, tmp_path, factory, org_name="研一")
+
+    assert email_mod.send(make_report(), ["leader@company.com"]) is True
+
+    parsed = email.message_from_string(factory.instances[0].sent[0],
+                                       policy=email.policy.default)
+    assert parsed["Subject"] == "研一 研发一组 2026-09-29 智能日报"
+
+
+def test_subject_format_without_org_name(monkeypatch, tmp_path):
+    """未配置 org_name：主题退化为「{team_name} {date} 智能日报」。"""
+    factory = make_factory()
+    install(monkeypatch, tmp_path, factory)  # org_name=None：不写入配置
+
+    assert email_mod.send(make_report(), ["leader@company.com"]) is True
+
+    parsed = email.message_from_string(factory.instances[0].sent[0],
+                                       policy=email.policy.default)
+    assert parsed["Subject"] == "研发一组 2026-09-29 智能日报"
 
 
 def test_multiple_recipients(monkeypatch, tmp_path):

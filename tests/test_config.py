@@ -49,6 +49,18 @@ def test_optional_fields_get_defaults(tmp_path, monkeypatch):
     assert cfg["storage"]["db_path"] == "data/report.db"
 
 
+def test_org_name_optional_field(tmp_path):
+    """org_name 可选：缺失/非字符串按空串处理，字符串值原样保留。"""
+    cfg = load_config(_write(tmp_path, VALID))
+    assert cfg["org_name"] == ""  # 未配置：默认空字符串（不参与必填校验）
+
+    cfg = load_config(_write(tmp_path, {**VALID, "org_name": "研一"}))
+    assert cfg["org_name"] == "研一"
+
+    cfg = load_config(_write(tmp_path, {**VALID, "org_name": 123}))
+    assert cfg["org_name"] == ""  # 非字符串：按空字符串处理
+
+
 def test_webhook_url_falls_back_to_env(tmp_path, monkeypatch):
     monkeypatch.setenv("LARK_BOT_WEBHOOK_URL", "https://example.com/hook")
     data = {**VALID}

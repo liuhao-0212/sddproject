@@ -106,6 +106,9 @@ def _validate(cfg: dict) -> list[str]:
 
 def _apply_defaults(cfg: dict) -> None:
     """为可选字段填充默认值；密钥类字段优先取配置文件值，否则回退环境变量。"""
+    # org_name 可选（邮件主题前缀）：缺失/非字符串按空字符串处理（不参与必填校验）
+    org_name = cfg.get("org_name")
+    cfg["org_name"] = org_name.strip() if isinstance(org_name, str) else ""
     lark_msg = cfg.setdefault("collector", {}).setdefault("lark_msg", {})
     lark_msg.setdefault("sensitive_keywords", [])
     lark_bot = cfg.setdefault("notifier", {}).setdefault("lark_bot", {})
