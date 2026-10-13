@@ -25,8 +25,10 @@ def make_report():
     )
 
 
-def install(monkeypatch, tmp_path, handler, record_sleep=False, webhook=WEBHOOK):
-    """注入 tmp config.yaml（含 webhook）、假 HTTP 客户端与免等待 sleep。"""
+def install(monkeypatch, tmp_path, handler, record_sleep=False, webhook=WEBHOOK,
+            org_name=None):
+    """注入 tmp config.yaml（含 webhook）、假 HTTP 客户端与免等待 sleep。
+    org_name 为 None 时不写入（模拟未配置组织标签）。"""
     sleeps: list[float] = []
     cfg = {
         "team_name": "研发一组",
@@ -42,6 +44,8 @@ def install(monkeypatch, tmp_path, handler, record_sleep=False, webhook=WEBHOOK)
             "lark_bot": {"webhook_url": webhook},
         },
     }
+    if org_name is not None:
+        cfg["org_name"] = org_name
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
     monkeypatch.setattr(lark_bot, "CONFIG_PATH", str(path))
@@ -70,8 +74,38 @@ def test_send_success_returns_true_and_sends_markdown(monkeypatch, tmp_path):
     element = payload["card"]["elements"][0]
     assert element["tag"] == "markdown"
     assert element["content"] == make_report().markdown
-    # 卡片标题格式：{team_name} 智能日报（日期）
-    assert payload["card"]["header"]["title"]["content"] == "研发一组 智能日报（2026-09-29）"
+    # 卡片标题：无 org_name 时退化为「{team_name} {date} 智能日报」
+    assert payload["card"]["header"]["title"]["content"] == "研发一组 2026-09-29 智能日报"
+
+
+def test_card_title_with_org_name(monkeypatch, tmp_path):
+    """配置了 org_name：卡片标题为「{org_name} {team_name} {date} 智能日报」。"""
+    captured: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"code": 0})
+
+    install(monkeypatch, tmp_path, handler, org_name="研一")
+    assert lark_bot.send(make_report(), "oc_test") is True
+
+    payload = json.loads(captured[0].content)
+    assert payload["card"]["header"]["title"]["content"] == "研一 研发一组 2026-09-29 智能日报"
+
+
+def test_card_title_without_org_name(monkeypatch, tmp_path):
+    """未配置 org_name：卡片标题退化为「{team_name} {date} 智能日报」。"""
+    captured: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"code": 0})
+
+    install(monkeypatch, tmp_path, handler)  # org_name=None：不写入配置
+    assert lark_bot.send(make_report(), "oc_test") is True
+
+    payload = json.loads(captured[0].content)
+    assert payload["card"]["header"]["title"]["content"] == "研发一组 2026-09-29 智能日报"
 
 
 def test_send_accepts_v1_webhook_response(monkeypatch, tmp_path):

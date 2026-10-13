@@ -3,6 +3,7 @@
 接口契约: send(report, chat_id) -> bool
 
 - 发送内容为 report.markdown，以 interactive 卡片的 markdown 元素渲染
+- 卡片标题为「{org_name} {team_name} {date} 智能日报」（org_name 未配置时省略前缀）
 - webhook 地址读 config.yaml 的 notifier.lark_bot.webhook_url，
   为空时回退环境变量 LARK_BOT_WEBHOOK_URL（design.md §6.2）
 - 发送失败重试 2 次，仍失败返回 False + 错误日志（design.md §6.1；
@@ -47,7 +48,7 @@ def send(report: DailyReport, chat_id: str) -> bool:
         logger.error("飞书推送失败：webhook 配置不可用",
                      extra={"path": CONFIG_PATH, "reason": str(exc)}, exc_info=exc)
         return False
-    payload = _build_payload(report)
+    payload = _build_payload(report, _org_name())
 
     attempt = 0
     while True:
@@ -83,14 +84,25 @@ def _webhook_url() -> str:
     return url
 
 
-def _build_payload(report: DailyReport) -> dict[str, Any]:
-    """构造 interactive 卡片消息，以 markdown 元素渲染日报正文。"""
+def _org_name() -> str:
+    """config.yaml 的 org_name（可选，默认空字符串；为空时卡片标题省略前缀）。"""
+    try:
+        cfg = load_config(CONFIG_PATH)
+    except Exception:  # 配置读取失败不阻断发送（§6.1 优雅降级，发送层另有兜底）
+        return ""
+    return str(cfg.get("org_name") or "")  # config.py 已按可选字段归一化（默认空串）
+
+
+def _build_payload(report: DailyReport, org_name: str = "") -> dict[str, Any]:
+    """构造 interactive 卡片消息，以 markdown 元素渲染日报正文；
+    卡片标题「{org_name} {team_name} {date} 智能日报」（org_name 为空时省略前缀）。"""
+    title_parts = [part for part in (org_name, report.team_name,
+                                     report.date.isoformat(), REPORT_NAME) if part]
     return {
         "msg_type": "interactive",
         "card": {
             "header": {
-                "title": {"tag": "plain_text",
-                          "content": f"{report.team_name} {REPORT_NAME}（{report.date.isoformat()}）"},
+                "title": {"tag": "plain_text", "content": " ".join(title_parts)},
                 "template": "blue",
             },
             "elements": [{"tag": "markdown", "content": report.markdown}],
