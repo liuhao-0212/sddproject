@@ -169,7 +169,9 @@ def test_normal_flow_generates_report_and_pushes(monkeypatch, env):
 
 # ---------- 2. 降级场景 ----------
 
-def test_degraded_source_timeout_is_annotated(monkeypatch, env):
+def test_degraded_source_shows_friendly_line(monkeypatch, env):
+    """v1.4 修订：单源失败不阻断其他源；失败源板块保留并显示可读说明，
+    原始原因不进正文（§6.1 的「不静默」由日志与告警保证）。"""
     stub_sources(monkeypatch,
                  tasks=[make_task()],
                  messages=[make_message()],
@@ -180,9 +182,10 @@ def test_degraded_source_timeout_is_annotated(monkeypatch, env):
     assert rc == 0
     assert len(env["emails"]) == 1
     report = env["emails"][0][0]
-    assert "数据获取失败" in report.markdown
-    assert "GitHub采集异常：请求超时" in report.markdown
-    assert "<strong>数据获取失败</strong>" in report.html
+    assert "▪ 代码提交" in report.markdown
+    assert "· 飞书接口连接失败" in report.markdown
+    assert "飞书接口连接失败" in report.html
+    assert "请求超时" not in report.markdown
     # 其他数据源正常渲染
     assert "实现登录页：未开始 → 进行中" in report.markdown
     assert "评审文档已上传" in report.markdown
@@ -231,11 +234,12 @@ def test_attendance_rendered_in_report(monkeypatch, env):
     report = env["emails"][0][0]
     assert "### ▪ 工时统计" in report.markdown
     assert "工时 9 小时（正常）" in report.markdown
-    # 无考勤记录的成员同样标注"考勤数据暂不可用"（李四）
-    assert report.markdown.count("考勤数据暂不可用") == 1
+    # 张三任务/消息无记录（2 条）+ 李四四个板块均无记录（4 条）
+    assert report.markdown.count("· 今日无记录") == 6
 
 
-def test_attendance_failure_shows_unavailable(monkeypatch, env, caplog):
+def test_attendance_failure_shows_friendly_and_logs(monkeypatch, env, caplog):
+    """v1.4 修订：考勤源不可用 → 工时统计板块保留 + 可读说明；失败经日志显式记录。"""
     stub_sources(monkeypatch, commits=[make_commit()], attendance_err="考勤接口超时")
 
     with caplog.at_level(logging.ERROR):
@@ -243,8 +247,11 @@ def test_attendance_failure_shows_unavailable(monkeypatch, env, caplog):
 
     assert rc == 0
     report = env["emails"][0][0]
-    assert "考勤数据暂不可用" in report.markdown
-    assert "考勤数据暂不可用" in report.html
+    assert "▪ 工时统计" in report.markdown
+    assert "· 飞书接口连接失败" in report.markdown
+    assert "飞书接口连接失败" in report.html
+    assert "考勤接口超时" not in report.markdown
+    assert "考勤数据暂不可用" not in report.markdown
     assert "飞书考勤采集失败" in caplog.text  # 异常经日志显式记录，未被吞掉
     # 其他数据源正常渲染，单源失败不阻断日报生成
     assert "feat: 登录页" in report.markdown
@@ -259,7 +266,7 @@ def test_unmapped_attendance_record_warns(monkeypatch, env, caplog):
 
     assert rc == 0
     assert "未映射到任何成员的考勤记录" in caplog.text
-    assert "考勤数据暂不可用" in env["emails"][0][0].markdown
+    assert "· 今日无记录" in env["emails"][0][0].markdown
 
 
 # ---------- 5. 性能（Mock 环境） ----------

@@ -8,8 +8,8 @@
 错误处理（design.md §6.1）:
 - 单个数据源失败不阻断其他数据源；github/lark_task/lark_msg 经 get_last_error()
   探测（区分“失败”与“为空”），考勤经 CollectResult.success 探测（ADR-003），
-  失败原因填入 MemberReport.source_errors，由生成层在日报中标注
-  “数据获取失败”/“考勤数据暂不可用”
+  失败原因填入 MemberReport.source_errors 并记日志，生成层据此在日报中
+  显示可读说明（v1.4 修订，design.md §6.5；原始异常只进日志）
 - 所有数据源失败时不生成空日报，记录错误日志并发送告警邮件
 - 推送渠道互为备份告警通道：邮件失败经飞书告警，飞书失败经邮件告警
 - 推送渠道未配置时跳过（不推送、不告警），仅「已配置且发送失败」触发备份告警（v1.2）
@@ -110,7 +110,7 @@ def _run(dry_run: bool) -> int:
             logger.info("数据源采集完成",
                         extra={"source": "lark_attendance", "count": len(attendance_result.data)})
         else:
-            logger.error("飞书考勤采集失败，日报将标注“考勤数据暂不可用”",
+            logger.error("飞书考勤采集失败，日报将以可读说明标注该数据源",
                          extra={"reason": attendance_result.error})
     else:
         attendance_result = None

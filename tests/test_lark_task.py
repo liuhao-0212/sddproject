@@ -53,6 +53,10 @@ def install(monkeypatch, handler, record_sleep=False, with_creds=True):
     if with_creds:
         monkeypatch.setenv("LARK_APP_ID", "cli_test")
         monkeypatch.setenv("LARK_APP_SECRET", "sec_test")
+    else:
+        # 宿主环境可能残留真实凭据（shell 配置等），必须显式清除，保证测试环境隔离
+        monkeypatch.delenv("LARK_APP_ID", raising=False)
+        monkeypatch.delenv("LARK_APP_SECRET", raising=False)
     monkeypatch.setattr(lark, "_get_client",
                         lambda: httpx.Client(transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(lark_common, "_sleep", sleeps.append if record_sleep else (lambda s: None))

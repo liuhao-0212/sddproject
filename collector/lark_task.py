@@ -70,7 +70,8 @@ class TaskRecord:
 def collect(project_id: str, since: datetime, until: datetime) -> list[TaskRecord]:
     """获取飞书项目在 [since, until] 内的任务状态变更记录。
 
-    采集失败返回空列表并记录错误日志（由生成层在日报中标注"数据获取失败"）。
+    采集失败返回空列表并记录错误日志（失败原因经 get_last_error() 上报，
+    由生成层以可读说明标注，v1.4 修订）。
     """
     global _last_error
     _last_error = None

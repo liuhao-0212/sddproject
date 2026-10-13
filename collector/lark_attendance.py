@@ -3,9 +3,9 @@
 接口契约: collect(since, until) -> CollectResult[AttendanceRecord]
 
 与 v1.0 三个采集器不同，本模块返回 CollectResult 而非裸 list（ADR-003）：
-- success=False：接口调用失败（error 携带原因），调用方标注"考勤数据暂不可用"
+- success=False：接口调用失败（error 携带原因），调用方记日志并以可读说明标注（v1.4 修订）
 - success=True + 空 data：接口正常但无数据
-二者必须可明确区分，调用方据此决定降级标注。
+二者必须可明确区分，调用方据此决定降级处理。
 
 采集范围（design.md §6.2）：仅采集 config.yaml members 映射表中列出的成员，
 members[].lark 作为飞书考勤的员工标识（employee_type=email）。
@@ -102,7 +102,7 @@ def collect(since: date, until: date) -> CollectResult[AttendanceRecord]:
     """获取团队在 [since, until]（含两端）的考勤记录（design.md §4.1）。
 
     任何采集失败都不抛出异常：返回 CollectResult(success=False, error=原因)，
-    由编排层在日报中标注"考勤数据暂不可用"（design.md §6.1 优雅降级）。
+    由编排层记日志并在日报中以可读说明标注（design.md §6.1 优雅降级、§6.5 v1.4 修订）。
     """
     try:
         return _collect_inner(since, until)

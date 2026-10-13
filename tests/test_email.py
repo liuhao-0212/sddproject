@@ -74,8 +74,14 @@ def install(monkeypatch, tmp_path, factory=None, record_sleep=False, port=465,
     if with_creds:
         monkeypatch.setenv("SMTP_USER", "report@company.com")
         monkeypatch.setenv("SMTP_PASSWORD", "secret")
+    else:
+        # 宿主环境可能残留真实凭据（shell 配置等），必须显式清除，保证测试环境隔离
+        monkeypatch.delenv("SMTP_USER", raising=False)
+        monkeypatch.delenv("SMTP_PASSWORD", raising=False)
     if with_from:
         monkeypatch.setenv("SMTP_FROM", "report@company.com")
+    else:
+        monkeypatch.delenv("SMTP_FROM", raising=False)
     cfg = {
         "team_name": "研发一组",
         "members": [{"name": "张三", "github": "zs", "lark": "zs@company.com"}],

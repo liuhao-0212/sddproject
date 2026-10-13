@@ -5,11 +5,13 @@
 - 结构（v1.3，面向非技术读者，design.md §6.5）：
   头部（📊 标题·团队名 / 📅 日期含星期 / 数据范围）
   → ▎今日概览（汇总数字）→ 各成员段落（▎成员 → ▪板块 → ·条目）→ 落款
-- 未接入的源（缺凭据/占位值）：板块不渲染；已接入但失败的源必须显示
-  「数据获取失败」+ 过滤后的简短原因（design.md §6.1 严禁静默跳过）
+- v1.4 展示规则（design.md §6.5 修订）：有数据 → 正常显示；已接入但当天无数据 →
+  「今日无记录」（板块保留）；不可用（已接入但失败）→ 板块保留 + 一行可读说明
+  （技术错误经 _friendly_reason 映射为固定文案）；未接入（缺凭据/占位值）→ 不渲染
+- 失败信息只进日志：原始异常文本、环境变量名、堆栈不进日报正文
+  （§6.1 的「不静默跳过」由日志与告警保证）
 - 代码提交：每条只展示消息标题行 + 增删行数（不含仓库全名/文件数/trailer/时间）
-- 工时统计：一行展示工时与出勤状态；考勤不可用标注「考勤数据暂不可用」（proposal §3.4）
-- 异常细节（堆栈、环境变量名、内部 ID）只进日志，不进日报正文
+- 工时统计：一行展示工时与出勤状态；可用但当天无记录显示「今日无记录」
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -33,22 +35,24 @@ SOURCE_ORDER = [
     ("lark_attendance", "飞书考勤"),
     ("lark_msg", "飞书消息"),
 ]
-# 数据源 key → 展示名（与编排层填充 MemberReport.source_errors 的 key 约定一致）
-SOURCE_LABELS = dict(SOURCE_ORDER)
-
 NO_RECORDS_TEXT = "今日无记录"
-FAILURE_TEXT = "数据获取失败"
-ATTENDANCE_UNAVAILABLE_TEXT = "考勤数据暂不可用"
 
 # 报告名称：头部标题 / HTML 页面标题 / 邮件主题 / 飞书卡片标题共用（一处定义、多处使用）
 REPORT_NAME = "智能日报"
 
 # 「未接入」（缺凭据/未授权/占位值）判定关键词（design.md §6.5）：与采集层的权威错误文案
-# 及编排层跳过采集时填充的原因对齐；命中时板块整体不渲染（v1.3），原因只进日志。
+# 及编排层跳过采集时填充的原因对齐；命中时板块整体不渲染，原因只进日志。
 NOT_CONFIGURED_KEYWORDS = ("凭据未配置", "未配置", "未授权", "缺少飞书用户标识")
 
-# 环境变量名模式（大写字母 + 下划线），用于过滤「调用失败」原因中的内部细节
-_ENV_VAR_RE = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b")
+# 技术错误 → 读者可读文案映射（design.md §6.5 v1.4 修订）：按表序首条命中生效；
+# 输出为固定文案，不含原始异常文本、环境变量名、堆栈。
+FRIENDLY_REASONS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("platform policy", "平台"), "飞书接口受限（平台策略），暂不可用"),
+    (("secret", "凭据未配置"), "飞书凭证未配置"),
+    (("403", "permission", "权限"), "飞书权限不足，暂不可用"),
+    (("timeout", "超时", "connect"), "飞书接口连接失败"),
+)
+FRIENDLY_DEFAULT_REASON = "飞书数据暂不可用"
 
 # 星期展示（date.weekday(): 0=周一）
 WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
@@ -66,8 +70,10 @@ def _local(dt: datetime) -> datetime:
 class MemberReport:
     """成员报告（design.md §3.2）。
 
-    source_errors 为 §6.1 失败标注的扩展：数据源 key → 失败原因，
-    由编排层（main.py）在采集失败或未配置时填入，生成层据此分级展示。
+    source_errors 为数据源失败/未配置标注（数据源 key → 原因），
+    由编排层（main.py）在采集失败或未配置时填入；生成层据此分级展示
+    （v1.4 修订）：未接入的源不渲染，不可用的源保留板块 + 一行可读说明
+    （原因本身只进日志）。
     """
 
     name: str                        # 成员姓名
@@ -75,8 +81,8 @@ class MemberReport:
     commits: list[CommitRecord] = field(default_factory=list)    # 代码提交记录
     tasks: list[TaskRecord] = field(default_factory=list)        # 任务变更记录
     messages: list[MessageRecord] = field(default_factory=list)  # 相关消息记录
-    source_errors: dict[str, str] = field(default_factory=dict)  # 数据源失败标注
-    attendance: AttendanceRecord | None = None  # 考勤记录（v1.1 新增；None 视为不可用）
+    source_errors: dict[str, str] = field(default_factory=dict)  # 数据源失败/未配置标注
+    attendance: AttendanceRecord | None = None  # 考勤记录（v1.1 新增；None 视为当天无记录）
 
 
 @dataclass
@@ -132,13 +138,12 @@ def _render_header(team_name: str, report_date: date,
 
 
 def _render_overview(members: list[MemberReport]) -> list[str]:
-    """今日概览（v1.3）：全团队汇总数字，位于成员段落之前；
-    未接入的源整行不输出（与正文板块规则一致，design.md §6.5）；
-    已接入但为 0 的源仍显示（「0 项」「0 人」是有效信息）。"""
+    """今日概览（v1.4 修订）：全团队汇总数字，位于成员段落之前；
+    未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。"""
     errors: dict[str, str] = {}
     for member in members:
         for source, reason in member.source_errors.items():
-            errors.setdefault(source, reason)
+            errors.setdefault(source, reason)  # 编排层为所有成员填充同一份 source_errors
 
     def active(source: str) -> bool:
         return not _is_not_configured(errors.get(source, ""))
@@ -164,7 +169,8 @@ def _render_overview(members: list[MemberReport]) -> list[str]:
 
 
 def _render_member(member: MemberReport) -> list[str]:
-    """成员段落（v1.3）：▎成员 → ▪板块 → ·条目；未接入的板块不渲染。"""
+    """成员段落（v1.3）：▎成员 → ▪板块 → ·条目；未接入的板块不渲染，
+    不可用的板块保留并显示可读说明（v1.4 修订）。"""
     lines = [f"## ▎{member.name}", ""]
     for section_title, section_lines in (
         ("代码提交", _render_commits(member)),
@@ -180,9 +186,9 @@ def _render_member(member: MemberReport) -> list[str]:
 
 def _render_commits(member: MemberReport) -> list[str]:
     if _unconfigured(member, "github"):
-        return []  # v1.3：未接入的源板块不渲染
+        return []  # 未接入：板块不渲染（design.md §6.5）
     if "github" in member.source_errors:
-        return [f"- · {_failure_text('github', member)}", ""]
+        return [f"- · {_friendly_reason(member.source_errors['github'])}", ""]  # v1.4：保留板块 + 可读说明
     commits = sorted(member.commits, key=lambda c: c.timestamp)
     if not commits:
         return [f"- · {NO_RECORDS_TEXT}", ""]
@@ -198,9 +204,9 @@ def _render_commits(member: MemberReport) -> list[str]:
 
 def _render_tasks(member: MemberReport) -> list[str]:
     if _unconfigured(member, "lark_task"):
-        return []
+        return []  # 未接入：板块不渲染（design.md §6.5）
     if "lark_task" in member.source_errors:
-        return [f"- · {_failure_text('lark_task', member)}", ""]
+        return [f"- · {_friendly_reason(member.source_errors['lark_task'])}", ""]  # v1.4：保留板块 + 可读说明
     if not member.tasks:
         return [f"- · {NO_RECORDS_TEXT}", ""]
     lines = []
@@ -213,9 +219,9 @@ def _render_tasks(member: MemberReport) -> list[str]:
 
 def _render_messages(member: MemberReport) -> list[str]:
     if _unconfigured(member, "lark_msg"):
-        return []
+        return []  # 未接入：板块不渲染（design.md §6.5）
     if "lark_msg" in member.source_errors:
-        return [f"- · {_failure_text('lark_msg', member)}", ""]
+        return [f"- · {_friendly_reason(member.source_errors['lark_msg'])}", ""]  # v1.4：保留板块 + 可读说明
     if not member.messages:
         return [f"- · {NO_RECORDS_TEXT}", ""]
     lines = []
@@ -230,13 +236,15 @@ def _render_messages(member: MemberReport) -> list[str]:
 
 
 def _render_attendance(member: MemberReport) -> list[str]:
-    """工时统计板块（proposal §3.4 v1.1）：考勤不可用/缺记录时显示「考勤数据暂不可用」；
-    未接入（缺凭据/占位值）的源板块不渲染（v1.3）；调用失败保持固定文案，原因只进日志。"""
+    """工时统计板块（proposal §3.4 v1.1）：未接入不渲染；不可用保留板块 +
+    一行可读说明（v1.4 修订）；可用但当天无记录显示「今日无记录」（板块保留）。"""
     if _unconfigured(member, "lark_attendance"):
         return []
+    if "lark_attendance" in member.source_errors:
+        return [f"- · {_friendly_reason(member.source_errors['lark_attendance'])}", ""]  # v1.4：保留板块 + 可读说明
     attendance = member.attendance
     if attendance is None:
-        return [f"- · {ATTENDANCE_UNAVAILABLE_TEXT}", ""]
+        return [f"- · {NO_RECORDS_TEXT}", ""]
     if attendance.check_in and attendance.check_out:
         return [f"- · 工时 {attendance.work_hours:g} 小时（{attendance.status}）", ""]
     if attendance.check_in is None and attendance.check_out is None \
@@ -253,7 +261,7 @@ def _render_attendance(member: MemberReport) -> list[str]:
 
 
 def _render_footer(members: list[MemberReport], generated_at: datetime) -> list[str]:
-    """落款（v1.3）：🤖 生成器署名；数据来源（剔除未接入的源）｜ 生成时间。"""
+    """落款（v1.4 修订）：🤖 生成器署名；数据来源列出所有已接入的源（含不可用）｜ 生成时间。"""
     errors: dict[str, str] = {}
     for member in members:
         for source, reason in member.source_errors.items():
@@ -267,31 +275,27 @@ def _render_footer(members: list[MemberReport], generated_at: datetime) -> list[
 
 
 def _unconfigured(member: MemberReport, source: str) -> bool:
-    """该数据源是否未接入（缺凭据/未授权/占位值）（design.md §6.5）。"""
+    """该数据源是否未接入（缺凭据/未授权/占位值）（design.md §6.5）：板块不渲染。"""
     reason = member.source_errors.get(source, "").strip()
     return bool(reason) and _is_not_configured(reason)
 
 
-def _failure_text(source: str, member: MemberReport) -> str:
-    """已接入但采集失败的标注（design.md §6.1：严禁静默跳过；§6.5：简短原因）。"""
-    label = SOURCE_LABELS.get(source, source)
-    reason = member.source_errors.get(source, "").strip()
-    suffix = f"：{_sanitize_reason(reason)}" if reason else ""
-    return f"**{FAILURE_TEXT}**（{label}采集异常{suffix}）"
-
-
 def _is_not_configured(reason: str) -> bool:
-    """是否属于「未接入」（缺凭据/未授权/占位值）类失败（design.md §6.5）。"""
+    """是否属于「未接入」（缺凭据/未授权/占位值）类原因（design.md §6.5）。"""
     return any(keyword in reason for keyword in NOT_CONFIGURED_KEYWORDS)
 
 
-def _sanitize_reason(reason: str) -> str:
-    """「调用失败」原因的对外展示过滤（design.md §6.5）：只留一句话，剔除堆栈与环境变量名。"""
-    reason = reason.splitlines()[0].strip()  # 堆栈等多行细节只出现在日志，绝不进入日报
-    if not reason or reason.lower().startswith("traceback"):
-        return ""  # 无法提炼出可对外的一句话时退回无原因展示
-    reason = _ENV_VAR_RE.sub("", reason)  # 环境变量名（如 LARK_APP_SECRET）属内部细节
-    return re.sub(r"\s{2,}", " ", reason).strip(" ：，,;；()（）")
+def _friendly_reason(err: str) -> str:
+    """把技术错误映射为读者可读的一句话（design.md §6.5 v1.4 修订映射表）。
+
+    按表序首条命中的关键词输出固定文案；原始异常文本、环境变量名、
+    堆栈一律不进入日报正文。
+    """
+    lowered = err.lower()
+    for keywords, text in FRIENDLY_REASONS:
+        if any(keyword in lowered for keyword in keywords):
+            return text
+    return FRIENDLY_DEFAULT_REASON
 
 
 def markdown_to_html(markdown: str) -> str:
