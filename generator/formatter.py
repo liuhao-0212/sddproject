@@ -12,6 +12,8 @@
   （§6.1 的「不静默跳过」由日志与告警保证）
 - 代码提交：每条只展示消息标题行 + 增删行数（不含仓库全名/文件数/trailer/时间）
 - 工时统计：一行展示工时与出勤状态；可用但当天无记录显示「今日无记录」
+- HTML 由 template.render_html 按结构化数据渲染（v1.5）：深色标题条 → 概览卡片组
+  → 板块卡片（图标 + 状态徽章）→ 落款；Markdown 输出保持 v1.3/v1.4 结构不变
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -35,6 +37,16 @@ SOURCE_ORDER = [
     ("lark_attendance", "飞书考勤"),
     ("lark_msg", "飞书消息"),
 ]
+# 板块顺序与元信息：source key → (板块标题, HTML 板块图标)（design.md §6.5 v1.5）；
+# Markdown 标题仍为「▪ 标题」不变，图标仅用于 HTML。
+SECTIONS = (
+    ("github", "代码提交", "💻"),
+    ("lark_task", "任务进展", "📋"),
+    ("lark_attendance", "工时统计", "⏱"),
+    ("lark_msg", "协作沟通", "💬"),
+)
+SECTION_ICONS = {source: icon for source, _title, icon in SECTIONS}
+
 NO_RECORDS_TEXT = "今日无记录"
 
 # 报告名称：头部标题 / HTML 页面标题 / 邮件主题 / 飞书卡片标题共用（一处定义、多处使用）
@@ -99,10 +111,13 @@ class DailyReport:
 
 def generate(members: list[MemberReport], date: date, team_name: str,
              window: tuple[datetime, datetime] | None = None) -> DailyReport:
-    """生成日报（design.md §4.2）。window 为采集窗口 (since, until)，用于头部数据范围。"""
+    """生成日报（design.md §4.2）。window 为采集窗口 (since, until)，用于头部数据范围。
+
+    Markdown 供飞书卡片使用（结构不变）；HTML 由模板按结构化数据渲染（v1.5）。
+    """
     generated_at = datetime.now()
     markdown = _build_markdown(members, date, team_name, window, generated_at)
-    html = render_html(markdown, date, team_name)
+    html = render_html(_html_structure(members, date, team_name, window, generated_at))
     return DailyReport(
         date=date,
         team_name=team_name,
@@ -111,6 +126,24 @@ def generate(members: list[MemberReport], date: date, team_name: str,
         markdown=markdown,
         html=html,
     )
+
+
+def _html_structure(members: list[MemberReport], report_date: date, team_name: str,
+                    window: tuple[datetime, datetime] | None,
+                    generated_at: datetime) -> dict:
+    """组装 HTML 模板所需的结构化数据（design.md §6.5 v1.5）；
+    板块正文与落款在此先行转 HTML，模板不再解析 Markdown。"""
+    stats = _overview_stats(members)
+    return {
+        "team_name": team_name,
+        "report_name": REPORT_NAME,
+        "title_date": report_date.isoformat(),
+        "date_text": f"{report_date.isoformat()} {WEEKDAYS[report_date.weekday()]}",
+        "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
+        "overview_cards": _overview_cards(stats),
+        "member_sections": _member_html_blocks(members),
+        "footer_html": _footer_html(members, generated_at),
+    }
 
 
 def _build_markdown(members: list[MemberReport], report_date: date, team_name: str,
@@ -137,49 +170,69 @@ def _render_header(team_name: str, report_date: date,
     return lines
 
 
-def _render_overview(members: list[MemberReport]) -> list[str]:
-    """今日概览（v1.4 修订）：全团队汇总数字，位于成员段落之前；
-    未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。"""
+def _overview_stats(members: list[MemberReport]) -> dict:
+    """全团队汇总数字与各源可用性（Markdown 概览与 HTML 概览卡片共用，v1.5）。"""
     errors: dict[str, str] = {}
     for member in members:
         for source, reason in member.source_errors.items():
             errors.setdefault(source, reason)  # 编排层为所有成员填充同一份 source_errors
+    attended = [m.attendance for m in members
+                if m.attendance is not None
+                and m.attendance.check_in and m.attendance.check_out]
+    return {
+        "active": {source: not _is_not_configured(errors.get(source, ""))
+                   for source, _label in SOURCE_ORDER},
+        "commits": sum(len(m.commits) for m in members),
+        "additions": sum(c.additions for m in members for c in m.commits),
+        "deletions": sum(c.deletions for m in members for c in m.commits),
+        "tasks": sum(len(m.tasks) for m in members),
+        "messages": sum(len(m.messages) for m in members),
+        "attended": len(attended),
+        "hours": sum(a.work_hours for a in attended),
+    }
 
-    def active(source: str) -> bool:
-        return not _is_not_configured(errors.get(source, ""))
 
+def _render_overview(members: list[MemberReport]) -> list[str]:
+    """今日概览（v1.4 修订）：全团队汇总数字，位于成员段落之前；
+    未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。"""
+    stats = _overview_stats(members)
+    active = stats["active"]
     lines = ["## ▎今日概览", ""]
-    if active("github"):
-        commits = sum(len(m.commits) for m in members)
-        additions = sum(c.additions for m in members for c in m.commits)
-        deletions = sum(c.deletions for m in members for c in m.commits)
-        lines.append(f"- · 代码提交 {commits} 次，共 +{additions} / -{deletions} 行")
-    if active("lark_task"):
-        lines.append(f"- · 任务进展 {sum(len(m.tasks) for m in members)} 项")
-    if active("lark_attendance"):
-        attended = [m.attendance for m in members
-                    if m.attendance is not None
-                    and m.attendance.check_in and m.attendance.check_out]
-        hours = sum(a.work_hours for a in attended)
-        lines.append(f"- · 工时统计 {len(attended)} 人，共 {hours:g} 小时")
-    if active("lark_msg"):
-        lines.append(f"- · 协作沟通 {sum(len(m.messages) for m in members)} 条")
+    if active["github"]:
+        lines.append(f"- · 代码提交 {stats['commits']} 次，共 +{stats['additions']} / -{stats['deletions']} 行")
+    if active["lark_task"]:
+        lines.append(f"- · 任务进展 {stats['tasks']} 项")
+    if active["lark_attendance"]:
+        lines.append(f"- · 工时统计 {stats['attended']} 人，共 {stats['hours']:g} 小时")
+    if active["lark_msg"]:
+        lines.append(f"- · 协作沟通 {stats['messages']} 条")
     lines.append("")
     return lines
+
+
+def _member_sections(member: MemberReport) -> list[tuple[str, str, list[str]]]:
+    """成员各板块的渲染结果 (source, 标题, markdown 行)；空行的板块不渲染。
+    Markdown 正文与 HTML 板块共用同一组装结果（v1.5）。"""
+    renderers = {
+        "github": _render_commits,
+        "lark_task": _render_tasks,
+        "lark_attendance": _render_attendance,
+        "lark_msg": _render_messages,
+    }
+    sections: list[tuple[str, str, list[str]]] = []
+    for source, title, _icon in SECTIONS:
+        section_lines = renderers[source](member)
+        if section_lines:
+            sections.append((source, title, section_lines))
+    return sections
 
 
 def _render_member(member: MemberReport) -> list[str]:
     """成员段落（v1.3）：▎成员 → ▪板块 → ·条目；未接入的板块不渲染，
     不可用的板块保留并显示可读说明（v1.4 修订）。"""
     lines = [f"## ▎{member.name}", ""]
-    for section_title, section_lines in (
-        ("代码提交", _render_commits(member)),
-        ("任务进展", _render_tasks(member)),
-        ("工时统计", _render_attendance(member)),
-        ("协作沟通", _render_messages(member)),
-    ):
-        if section_lines:
-            lines += [f"### ▪ {section_title}", "", *section_lines]
+    for _source, title, section_lines in _member_sections(member):
+        lines += [f"### ▪ {title}", "", *section_lines]
     lines += [""]
     return lines
 
@@ -272,6 +325,42 @@ def _render_footer(members: list[MemberReport], generated_at: datetime) -> list[
     lines.append(f"数据来源：{'、'.join(sources)} ｜ 生成时间 {generated_at:%Y-%m-%d %H:%M}")
     lines.append("")
     return lines
+
+
+def _overview_cards(stats: dict) -> list[dict]:
+    """HTML 概览卡片（design.md §6.5 v1.5）：提交次数 / 变更行数 / 讨论条数；
+    仅呈现已接入的源（未接入不出卡片，失败时计数为 0）。"""
+    cards: list[dict] = []
+    if stats["active"]["github"]:
+        cards.append({"label": "提交次数", "value": str(stats["commits"])})
+        cards.append({"label": "变更行数", "value": f"+{stats['additions']}/-{stats['deletions']}"})
+    if stats["active"]["lark_msg"]:
+        cards.append({"label": "讨论条数", "value": str(stats["messages"])})
+    return cards
+
+
+def _member_html_blocks(members: list[MemberReport]) -> list[dict]:
+    """HTML 版成员板块（v1.5）：与 Markdown 正文同源组装；
+    每板块附带图标与状态（✅ 正常 / ⚠️ 不可用），正文转 HTML 后交模板渲染。"""
+    blocks: list[dict] = []
+    for member in members:
+        sections = []
+        for source, title, section_lines in _member_sections(member):
+            sections.append({
+                "icon": SECTION_ICONS[source],
+                "title": title,
+                "status": "warn" if source in member.source_errors else "ok",
+                "body_html": markdown_to_html("\n".join(section_lines)),
+            })
+        blocks.append({"name": member.name, "sections": sections})
+    return blocks
+
+
+def _footer_html(members: list[MemberReport], generated_at: datetime) -> str:
+    """落款 HTML：与 Markdown 落款同源（_render_footer），v1.5 模板直接渲染。"""
+    lines = [line for line in _render_footer(members, generated_at)
+             if line.strip() and line.strip() != "---"]
+    return markdown_to_html("\n".join(lines))
 
 
 def _unconfigured(member: MemberReport, source: str) -> bool:

@@ -181,7 +181,7 @@ def test_html_wellformed_and_renders_sections():
     assert "<h1>📊 研发一组 智能日报</h1>" in html
     assert "<title>研发一组 智能日报（2026-09-29）</title>" in html
     assert "<h2>▎张三</h2>" in html
-    assert "<h3>▪ 代码提交</h3>" in html
+    assert '<h3>💻 ▪ 代码提交 <span class="badge badge-ok">✅ 正常</span></h3>' in html
     assert "<ul>" in html and "<li>" in html
 
 
@@ -467,7 +467,7 @@ def test_html_has_header_overview_and_footer():
     html = generate([make_member()], REPORT_DATE, "研发一组").html
 
     assert '<header class="report-head">' in html
-    assert '<section class="card overview-card">' in html
+    assert '<section class="overview">' in html
     assert '<section class="card member-card">' in html
     assert '<footer class="report-foot">' in html
     assert "🤖 由「智能日报生成器」自动生成" in html
@@ -534,3 +534,105 @@ def test_failure_reason_never_leaks_raw_terms():
     assert "secret" not in markdown
     assert "Traceback" not in markdown
     assert "File \"x.py\"" not in markdown
+
+
+# ---------- v1.5：HTML 视觉强化（design.md §6.5） ----------
+
+def test_html_header_bar_with_primary_color():
+    """v1.5：深色标题条（主色 #2563eb + 白字），含团队名/日期（含星期）。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '<header class="report-head">' in html
+    assert '<h1>📊 研发一组 智能日报</h1>' in html
+    assert '📅 2026-09-29 周二' in html
+    assert 'background: #2563eb' in html
+    assert 'color: #ffffff' in html
+
+
+def test_html_header_includes_data_range():
+    """v1.5：标题条含数据范围（传入 window 时）。"""
+    window = (datetime(2026, 9, 29, 0, 0, tzinfo=TZ),
+              datetime(2026, 9, 29, 18, 30, tzinfo=TZ))
+    html = generate([make_member()], REPORT_DATE, "研发一组", window=window).html
+
+    assert '数据范围 00:00-18:30' in html
+
+
+def test_html_overview_cards_with_big_numbers():
+    """v1.5：概览卡片组——提交次数/变更行数/讨论条数，大号数字。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '<section class="overview">' in html
+    assert html.count('class="stat-card"') == 3
+    assert '<span class="stat-value">+10/-3</span>' in html
+    assert '<span class="stat-label">提交次数</span>' in html
+    assert '<span class="stat-label">变更行数</span>' in html
+    assert '<span class="stat-label">讨论条数</span>' in html
+
+
+def test_html_overview_cards_exclude_unconfigured_sources():
+    """v1.5：未接入的源不出概览卡片（与 Markdown 概览规则一致）。"""
+    member = make_member(source_errors={
+        "lark_msg": "飞书消息未配置（collector.lark_msg.chat_id 为空或占位值）"})
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert html.count('class="stat-card"') == 2  # 仅 GitHub 的提交次数/变更行数
+    assert '讨论条数' not in html
+
+
+def test_html_member_section_cards_with_icons():
+    """v1.5：板块为浅色卡片（#f9fafb），标题带图标与正常徽章（成功色 #16a34a）。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '<section class="card member-card">' in html
+    assert 'background: #f9fafb' in html
+    assert '💻 ▪ 代码提交' in html
+    assert '📋 ▪ 任务进展' in html
+    assert '⏱ ▪ 工时统计' in html
+    assert '💬 ▪ 协作沟通' in html
+    assert '<span class="badge badge-ok">✅ 正常</span>' in html
+    assert 'color: #16a34a' in html
+
+
+def test_html_warning_badge_for_unavailable_section():
+    """v1.5：不可用的板块带 ⚠️ 徽章（警告色 #f59e0b），其余板块保持 ✅。"""
+    member = make_member(source_errors={"github": "请求超时"})
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert '<span class="badge badge-warn">⚠️ 不可用</span>' in html
+    assert 'color: #f59e0b' in html
+    assert '<span class="badge badge-ok">✅ 正常</span>' in html
+
+
+def test_html_footer_light_gray_centered():
+    """v1.5：落款浅灰背景（#f3f4f6）、居中、小字。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '<footer class="report-foot">' in html
+    assert 'background: #f3f4f6' in html
+    assert 'text-align: center' in html
+    assert '🤖 由「智能日报生成器」自动生成' in html
+    assert '数据来源：GitHub、飞书任务、飞书考勤、飞书消息' in html
+
+
+def test_html_responsive_stacks_cards_on_narrow_screens():
+    """v1.5：窄屏（<600px）概览卡片纵向堆叠（@media + display:block 降级）。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert '@media (max-width: 600px)' in html
+    assert 'display: block' in html
+
+
+def test_markdown_output_unchanged_by_v1_5():
+    """v1.5：Markdown（飞书卡片）结构与内容不受 HTML 模板改造影响。"""
+    window = (datetime(2026, 9, 29, 0, 0, tzinfo=TZ),
+              datetime(2026, 9, 29, 18, 30, tzinfo=TZ))
+    markdown = generate([make_member()], REPORT_DATE, "研发一组", window=window).markdown
+
+    assert markdown.startswith("# 📊 研发一组 智能日报\n\n📅 2026-09-29 周二"
+                               " · 数据范围 00:00-18:30\n")
+    assert "## ▎今日概览" in markdown
+    assert "### ▪ 代码提交" in markdown
+    assert "💻" not in markdown          # 图标仅用于 HTML
+    assert "✅ 正常" not in markdown     # 徽章仅用于 HTML
+    assert "stat-card" not in markdown   # HTML 组件不进 Markdown
