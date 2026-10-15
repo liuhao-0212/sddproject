@@ -121,3 +121,13 @@
 - [ ] 历史统计持久化到本地存储（**结构化字段**，非解析 Markdown）
 - [ ] 无历史数据时不报错（显示"暂无历史数据"）
 - [ ] Markdown / 飞书卡片结构保持兼容
+
+### 3.10 v1.7 新增验收（日报历史查询与导出）
+- [ ] `python main.py --history` 列出最近 30 天日报（日期、提交次数、变更行数、生成时间），按日期倒序
+- [ ] `--history --days N` 可指定天数，N 必须为正整数
+- [ ] `python main.py --show <YYYY-MM-DD>` 在终端打印该日最新一条日报 Markdown 原文
+- [ ] `python main.py --export <YYYY-MM-DD>` 导出 output/report-<日期>.md 与 .html
+- [ ] 三个命令均为只读：不采集、不生成、不推送、不写库（仅 --export 写导出文件）
+- [ ] 无记录时输出友好中文提示，不抛异常、不打堆栈；--show / --export 无记录退出码为 1
+- [ ] 日期格式非法（非 YYYY-MM-DD）时提示正确格式，退出码 1
+- [ ] 与 --check / --dry-run 互斥；不带参数时行为不变（完整流程）

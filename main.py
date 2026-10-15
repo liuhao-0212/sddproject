@@ -4,6 +4,9 @@
     python main.py            # 完整流程：采集 + 聚合 + 生成 + 推送 + 落库
     python main.py --check    # 仅验证配置与 API 连接（design.md §6.3 健康检查）
     python main.py --dry-run  # 采集 + 生成，不推送、不落库
+    python main.py --history [--days N]   # 只读：列出最近 N 天日报（v1.7）
+    python main.py --show DATE            # 只读：打印指定日期日报 Markdown（v1.7）
+    python main.py --export DATE          # 只读：导出指定日期日报到 output/（v1.7）
 
 错误处理（design.md §6.1）:
 - 单个数据源失败不阻断其他数据源；github/lark_task/lark_msg 经 get_last_error()
@@ -22,6 +25,7 @@ import argparse
 import re
 import sys
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
 
 import collector.github as github
@@ -46,13 +50,28 @@ LOCAL_TZ = datetime.now().astimezone().tzinfo
 def main(argv: list[str] | None = None) -> int:
     """命令行入口。"""
     setup_logging()
+    # 管道/重定向下 stdout 可能按本地编码（如 GBK）输出，日报正文含 emoji 会
+    # 抛 UnicodeEncodeError；显式切到 UTF-8（与 scripts/*_guard.py 一致）
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="智能日报生成器")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check", action="store_true", help="仅验证配置与 API 连接")
     group.add_argument("--dry-run", action="store_true", help="采集并生成日报，但不推送")
+    group.add_argument("--history", action="store_true", help="列出最近 N 天日报（只读，v1.7）")
+    group.add_argument("--show", metavar="DATE", help="打印指定日期日报 Markdown（只读，v1.7）")
+    group.add_argument("--export", metavar="DATE", help="导出指定日期日报为文件（只读，v1.7）")
+    parser.add_argument("--days", default="30",
+                        help="--history 的查询天数（正整数，默认 30）")
     args = parser.parse_args(argv)
     if args.check:
         return check()
+    if args.history:
+        return history(args.days)
+    if args.show:
+        return show(args.show)
+    if args.export:
+        return export(args.export)
     return run(dry_run=args.dry_run)
 
 
@@ -231,6 +250,150 @@ def check() -> int:
         logger.error("健康检查失败", extra={"failed": failed})
         return 1
     logger.info("健康检查通过")
+    return 0
+
+
+# ---------- v1.7：日报历史查询与导出（只读 CLI，design.md §6.3 / §6.5） ----------
+
+# --history 表头：列宽与 _history_row 对齐（日期 10 / 提交 4 / 变更行数 11）
+HISTORY_HEADER = "日期        提交  变更行数       生成时间"
+DATE_FORMAT_HINT = "日期格式错误，应为 YYYY-MM-DD"
+DAYS_HINT = "天数必须是正整数"
+NO_HISTORY_TEXT = "暂无历史日报记录"
+STORAGE_READ_ERROR_TEXT = "读取本地日报存储失败"
+
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _parse_date(value: str) -> date | None:
+    """仅接受 YYYY-MM-DD（v1.7）；非法输入返回 None。"""
+    if not _DATE_RE.fullmatch(value):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _open_storage() -> Storage | None:
+    """只读命令共用的存储句柄（v1.7）；配置/存储打开失败时打印提示并返回 None。"""
+    try:
+        return Storage(_db_path(load_config()))
+    except ReportError as exc:
+        logger.error("打开本地日报存储失败", extra={"reason": str(exc)}, exc_info=exc)
+        print(STORAGE_READ_ERROR_TEXT)
+        return None
+
+
+def _generated_str(value: str) -> str:
+    """把 ISO 格式的 generated_at 转成「YYYY-MM-DD HH:MM」用于展示。"""
+    try:
+        return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return str(value)
+
+
+def _history_row(row: dict) -> str:
+    """--history 的一行：日期 / 提交 / 变更行数 / 生成时间；无统计时计数列为「—」。"""
+    date_s = str(row["date"])
+    if row["commits_count"] is None:
+        commits_s, changes_s = "—", "—"
+    else:
+        commits_s = str(row["commits_count"])
+        changes_s = f"+{row['additions']}/-{row['deletions']}"
+    return f"{date_s:<10}{commits_s:>4} {changes_s:<11}{_generated_str(row['generated_at'])}"
+
+
+def history(days: str) -> int:
+    """--history：列出最近 N 天日报（只读：不采集/不生成/不推送/不落库）。"""
+    try:
+        count = int(days)
+    except (TypeError, ValueError):
+        print(DAYS_HINT)
+        return 1
+    if count < 1:
+        print(DAYS_HINT)
+        return 1
+    storage = _open_storage()
+    if storage is None:
+        return 1
+    try:
+        rows = storage.list_recent_reports(count)
+    except ReportError as exc:
+        logger.error("读取日报历史失败", extra={"reason": str(exc)}, exc_info=exc)
+        print(STORAGE_READ_ERROR_TEXT)
+        return 1
+    if not rows:
+        print(NO_HISTORY_TEXT)
+        return 0
+    print(HISTORY_HEADER)
+    for row in rows:
+        print(_history_row(row))
+    return 0
+
+
+def _latest_report(storage: Storage, date_str: str) -> dict | None:
+    """读取该日最新一条日报（get_reports 按 id 倒序即插入顺序倒序）；
+    读取失败或无记录时打印提示并返回 None。"""
+    try:
+        records = storage.get_reports(_parse_date(date_str))
+    except ReportError as exc:
+        logger.error("读取日报失败", extra={"reason": str(exc)}, exc_info=exc)
+        print(STORAGE_READ_ERROR_TEXT)
+        return None
+    if not records:
+        print(f"未找到 {date_str} 的日报记录")
+        return None
+    return records[0]
+
+
+def show(date_str: str) -> int:
+    """--show：原样打印该日最新一条日报 Markdown，末尾附导出提示（只读，v1.7）。"""
+    if _parse_date(date_str) is None:
+        print(DATE_FORMAT_HINT)
+        return 1
+    storage = _open_storage()
+    if storage is None:
+        return 1
+    latest = _latest_report(storage, date_str)
+    if latest is None:
+        return 1
+    markdown = str(latest["markdown"])
+    print(markdown, end="")
+    if not markdown.endswith("\n"):
+        print()
+    print()  # 空一行后接导出提示
+    print(f"提示：可执行 python main.py --export {date_str} 导出为文件")
+    return 0
+
+
+def export(date_str: str) -> int:
+    """--export：导出该日最新一条日报为 output/report-<日期>.md 与 .html（v1.7）。
+
+    仅此命令写文件（导出产物）；不采集、不生成、不推送、不写库。
+    """
+    if _parse_date(date_str) is None:
+        print(DATE_FORMAT_HINT)
+        return 1
+    storage = _open_storage()
+    if storage is None:
+        return 1
+    latest = _latest_report(storage, date_str)
+    if latest is None:
+        return 1
+    out_dir = Path("output")
+    md_path = out_dir / f"report-{date_str}.md"
+    html_path = out_dir / f"report-{date_str}.html"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(str(latest["markdown"]), encoding="utf-8")
+        html_path.write_text(str(latest["html"]), encoding="utf-8")
+    except OSError as exc:
+        logger.error("导出日报文件失败", extra={"reason": str(exc)}, exc_info=exc)
+        print("导出文件失败")
+        return 1
+    print(f"已导出：{md_path.as_posix()}")
+    print(f"已导出：{html_path.as_posix()}")
     return 0
 
 

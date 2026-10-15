@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -128,6 +128,24 @@ class Storage:
             rows = conn.execute(
                 "SELECT * FROM daily_stats WHERE date >= ? AND date <= ? ORDER BY date",
                 (self._date_str(start_date), self._date_str(end_date)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recent_reports(self, days: int) -> list[dict[str, Any]]:
+        """查询最近 days 天内出现过日报的日期（按日期倒序，v1.7）。
+
+        每项含 date、generated_at（该日最新一条日报的生成时间）与
+        commits_count / additions / deletions（来自 daily_stats，LEFT JOIN 语义；
+        该日无 daily_stats 行时三个计数为 None）。
+        """
+        cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT r.date AS date, MAX(r.generated_at) AS generated_at,"
+                " s.commits_count, s.additions, s.deletions"
+                " FROM reports r LEFT JOIN daily_stats s ON s.date = r.date"
+                " WHERE r.date >= ? GROUP BY r.date ORDER BY r.date DESC",
+                (cutoff,),
             ).fetchall()
         return [dict(row) for row in rows]
 

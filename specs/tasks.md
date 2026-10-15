@@ -253,6 +253,22 @@
 - [ ] Markdown 输出结构向后兼容
 - [ ] 全部测试通过
 
+## Task 17: 日报历史查询与导出（v1.7）
+描述: 新增只读 CLI 命令 --history / --history --days N / --show / --export，读取本地 SQLite 日报
+输入: design.md §6.3、§6.5(v1.7)、proposal.md §3.10
+输出: shared/storage.py（新增只读查询方法）、main.py（argparse + 处理函数）+ tests
+依赖: Task 16
+
+验收标准:
+- [ ] --history 按日期倒序列出（默认 30 天），含日期/提交次数/变更行数/生成时间
+- [ ] --history --days N 生效；N 非法（0/负数/非数字）时提示并退出码 1
+- [ ] --show <日期> 打印该日最新 Markdown
+- [ ] --export <日期> 生成 output/report-<日期>.md 与 .html
+- [ ] 三个命令只读（不采集/不生成/不推送/不落库）
+- [ ] 无记录 / 日期非法 → 友好提示，不抛堆栈
+- [ ] --check / --dry-run / 无参数行为不变
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

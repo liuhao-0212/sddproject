@@ -1,13 +1,15 @@
 """Claude Code PreToolUse Bash 护栏（由 .claude/settings.json 配置）。
 
 从 stdin 读取 hook JSON（tool_input 含 command），检查命令是否试图通过
-shell 写入 specs/ 目录；违规时输出 {"decision":"block","reason":...} 并以
-退出码 2 中止工具调用，纯读取类命令与不涉及 specs/ 的命令放行。
+shell 写入 specs/ 目录；放行时输出 hookSpecificOutput（permissionDecision=allow），
+违规时输出 permissionDecision=deny + 原因并以退出码 2 中止工具调用，
+纯读取类命令与不涉及 specs/ 的命令放行。
 
 规则（锚定规范）：
 1. specs/ 目录：规范只能由人类修改，经 shell 的一切写入途径都拦
    （重定向 > >>、tee、sed -i、python/perl 等解释器、mv/cp/rm、
-   truncate、dd 等），封堵「用 Bash 跑脚本绕过 Edit|Write 护栏」的路径
+   truncate、dd 等），封堵「用 Bash 跑脚本绕过 Edit|Write 护栏」的路径；
+   存在放行令牌 specs/.ai-edit-allow 时本次放行（写入时打印一行提示）
 2. 纯读取类命令（cat/grep/rg/head/tail/ls/wc/diff/stat）放行，避免误伤
 3. 不涉及 specs/ 的命令一律放行
 """
@@ -17,8 +19,15 @@ from __future__ import annotations
 import json
 import re
 import sys
+from pathlib import Path
 
-REASON = "禁止通过 shell 写入 specs/ 目录（规范只能由人类修改）"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# specs/ 修改放行令牌：人类创建 specs/.ai-edit-allow 后，本次放行 shell 写 specs/
+_SPECS_TOKEN = REPO_ROOT / "specs" / ".ai-edit-allow"
+_TOKEN_NOTICE = "检测到 spec 放行令牌 specs/.ai-edit-allow，本次允许 AI 修改 specs/"
+REASON = ("禁止通过 shell 写入 specs/ 目录（规范只能由人类修改）。"
+          "如需本次放行：创建 specs/.ai-edit-allow 后重试")
 
 # 纯读取类命令：作为命令行首个单词（跳过 sudo）出现且无任何写入迹象时直接放行
 READ_COMMANDS = {"cat", "grep", "rg", "head", "tail", "ls", "wc", "diff", "stat"}
@@ -81,12 +90,19 @@ _REDIRECT_RE = re.compile(r">")
 
 
 def _allow() -> int:
-    print(json.dumps({"decision": "allow"}, ensure_ascii=False))
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+    }}, ensure_ascii=False))
     return 0
 
 
 def _block(reason: str) -> int:
-    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}, ensure_ascii=False))
     return 2  # 退出码 2 = 中止工具调用
 
 
@@ -112,6 +128,11 @@ def _check(command: str) -> str | None:
         first = words[1]
 
     has_write = _has_write_indicator(command) or _has_file_redirect(command)
+
+    if _SPECS_TOKEN.exists():
+        if has_write:
+            print(_TOKEN_NOTICE, file=sys.stderr)  # 令牌生效：写入放行并提示
+        return None  # 放行令牌生效（纯读取原本就放行）
 
     # 纯读取类命令放行；但管道后段（head a | tee b）或重定向仍视为写入
     if first in READ_COMMANDS and not has_write:

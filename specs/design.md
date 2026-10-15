@@ -195,6 +195,7 @@ CollectResult[T]:
 - 日志：JSON lines 格式；INFO（正常）+ ERROR（异常）；每次执行记录开始/结束时间、各数据源采集条数、推送结果
 - 健康检查：提供 `main.py --check` 模式，验证 API 连接、邮件配置、飞书机器人权限
 - 配置热更新：成员映射表 config.yaml 修改后下次执行自动生效，无需重启
+- 历史查询：提供只读命令 `--history [--days N]`（列表）、`--show <日期>`（终端打印）、`--export <日期>`（导出 output/report-<日期>.md/.html）；只读命令不采集/不生成/不推送/不落库，纯本地读取（ADR-002 存储）
 
 ### 6.4 时区约定
 
@@ -262,3 +263,13 @@ CollectResult[T]:
   - 每次生成日报后写入当天统计
 - 无历史数据时显示「暂无历史数据」，不报错
 - 接口：generate(members, date, team_name, window=None, history=None)
+
+**v1.7：日报历史查询与导出（只读 CLI）**
+- `--history [--days N]`：默认最近 30 天，按日期倒序；表头「日期 / 提交 / 变更行数 / 生成时间」
+  - 数据来源：reports（日期与生成时间）+ daily_stats（计数，LEFT JOIN 语义）
+  - 该日无 daily_stats 行时，计数列显示「—」，不报错
+- `--show <YYYY-MM-DD>`：原样打印该日**最新**一条 Markdown，末尾附一行导出提示
+- `--export <YYYY-MM-DD>`：写 output/report-<日期>.md 与 .html，打印写入路径
+- 三条命令均不触发采集/生成/推送/落库
+- 空结果文案：「暂无历史日报记录」/「未找到 YYYY-MM-DD 的日报记录」
+- 日期解析：仅接受 YYYY-MM-DD，非法输入提示格式并返回退出码 1
