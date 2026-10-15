@@ -17,6 +17,7 @@ from collector.github import CommitRecord
 from collector.lark_attendance import AttendanceRecord, CollectResult
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
+from shared.errors import StorageError
 
 REPORT_DATE = date(2026, 9, 29)
 TZ = timezone.utc
@@ -102,7 +103,8 @@ def fixed_local_tz(monkeypatch):
 @pytest.fixture
 def env(monkeypatch):
     """打桩 main 的配置、日期、推送、告警与存储，并记录各调用。"""
-    state = {"emails": [], "larks": [], "alerts_email": [], "alerts_lark": [], "saved": []}
+    state = {"emails": [], "larks": [], "alerts_email": [], "alerts_lark": [],
+             "saved": [], "stats_saved": [], "stats_rows": []}
 
     monkeypatch.setattr(main, "date", _FakeDate)
     monkeypatch.setattr(main, "load_config", make_cfg)
@@ -126,6 +128,18 @@ def env(monkeypatch):
 
         def save_report(self, *args):
             state["saved"].append(args)
+
+        def save_stats(self, *args):
+            state["stats_saved"].append(args)
+
+        def get_stats_between(self, start, end):
+            """按 [start, end] 闭区间过滤预置统计行（与真实 Storage 行为一致）。"""
+            if state.get("stats_read_error"):
+                raise StorageError("读取统计失败（模拟）")
+            start_s = start.isoformat() if isinstance(start, date) else str(start)
+            end_s = end.isoformat() if isinstance(end, date) else str(end)
+            return [row for row in state["stats_rows"]
+                    if start_s <= row["date"] <= end_s]
 
     monkeypatch.setattr(main, "Storage", FakeStorage)
     return state
@@ -515,3 +529,73 @@ def test_unconfigured_attendance_skipped_and_hidden(monkeypatch, env):
     assert "考勤数据暂不可用" not in report.markdown
     assert "- · 工时统计" not in report.markdown  # 概览同样剔除未接入的源
     assert "数据来源：GitHub、飞书任务、飞书消息" in report.markdown
+
+
+# ---------- v1.6：趋势与周报（design.md §6.5） ----------
+
+def test_today_stats_written_to_storage(monkeypatch, env):
+    """生成日报后把当天统计写入 daily_stats（结构化字段，不解析 Markdown）。"""
+    stub_sources(monkeypatch,
+                 commits=[make_commit()],
+                 messages=[make_message()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert len(env["stats_saved"]) == 1
+    stats_date, team, commits, additions, deletions, messages = env["stats_saved"][0]
+    assert stats_date == REPORT_DATE
+    assert team == "研发一组"
+    assert commits == 1
+    assert additions == 10
+    assert deletions == 3
+    assert messages == 1
+
+
+def test_history_from_storage_feeds_week_and_yesterday(monkeypatch, env):
+    """有历史统计时：本周概况（含较上周）与今日概览「较昨日」进入日报。"""
+    env["stats_rows"] = [{
+        "date": "2026-09-28", "team_name": "研发一组", "commits_count": 3,
+        "additions": 30, "deletions": 9, "messages_count": 2,
+    }]  # 昨日（周一）统计；今日 2026-09-29（周二）
+    stub_sources(monkeypatch, commits=[make_commit()], messages=[make_message()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "## ▎本周概况" in report.markdown
+    assert report.markdown.index("## ▎本周概况") < report.markdown.index("## ▎今日概览")
+    # 本周 = 昨日库内统计 + 当日内存统计
+    assert "· 提交 4 次 ｜ 变更 +40 / -12 行" in report.markdown
+    assert "· 活跃 2 天 ｜ 📈 较上周：提交 +4 次" in report.markdown  # 上周无数据
+    assert "· 代码提交 1 次，共 +10 / -3 行 ｜ 📈 较昨日 -2 次" in report.markdown
+    assert '<span class="stat-label">较昨日提交</span>' in report.html
+
+
+def test_no_history_first_run_shows_placeholder(monkeypatch, env):
+    """首次运行无历史统计：本周概况显示「暂无历史数据」，不报错、无较昨日。"""
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "## ▎本周概况" in report.markdown
+    assert "· 暂无历史数据" in report.markdown
+    assert "较昨日" not in report.markdown
+    assert "暂无历史数据" in report.html  # HTML 同步显示占位文案
+
+
+def test_history_read_failure_does_not_block_report(monkeypatch, env, caplog):
+    """读取历史统计失败仅记日志，日报照常生成（history 传 None，v1.6 不阻断流程）。"""
+    env["stats_read_error"] = True
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    with caplog.at_level(logging.ERROR):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert len(env["emails"]) == 1
+    assert "· 暂无历史数据" in env["emails"][0][0].markdown
+    assert "读取历史统计失败" in caplog.text

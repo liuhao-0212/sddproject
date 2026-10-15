@@ -4,7 +4,7 @@
   window=(since, until)：采集窗口（本地时区 datetime），用于头部「数据范围 HH:MM-HH:MM」
 - 结构（v1.3，面向非技术读者，design.md §6.5）：
   头部（📊 标题·团队名 / 📅 日期含星期 / 数据范围）
-  → ▎今日概览（汇总数字）→ 各成员段落（▎成员 → ▪板块 → ·条目）→ 落款
+  → ▎本周概况（v1.6）→ ▎今日概览（汇总数字）→ 各成员段落（▎成员 → ▪板块 → ·条目）→ 落款
 - v1.4 展示规则（design.md §6.5 修订）：有数据 → 正常显示；已接入但当天无数据 →
   「今日无记录」（板块保留）；不可用（已接入但失败）→ 板块保留 + 一行可读说明
   （技术错误经 _friendly_reason 映射为固定文案）；未接入（缺凭据/占位值）→ 不渲染
@@ -14,6 +14,8 @@
 - 工时统计：一行展示工时与出勤状态；可用但当天无记录显示「今日无记录」
 - HTML 由 template.render_html 按结构化数据渲染（v1.5）：深色标题条 → 概览卡片组
   → 板块卡片（图标 + 状态徽章）→ 落款；Markdown 输出保持 v1.3/v1.4 结构不变
+- v1.6：新增「本周概况」板块（位于今日概览之前，含较上周对比）；今日概览代码提交行
+  追加「较昨日」对比；history 为 None 时显示「暂无历史数据」，不报错
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -110,14 +112,18 @@ class DailyReport:
 
 
 def generate(members: list[MemberReport], date: date, team_name: str,
-             window: tuple[datetime, datetime] | None = None) -> DailyReport:
+             window: tuple[datetime, datetime] | None = None,
+             history: dict | None = None) -> DailyReport:
     """生成日报（design.md §4.2）。window 为采集窗口 (since, until)，用于头部数据范围。
 
+    history 为历史统计（v1.6，由编排层从 daily_stats 读取组装），用于
+    「本周概况」与「较昨日」对比；None（无历史数据）时显示「暂无历史数据」。
     Markdown 供飞书卡片使用（结构不变）；HTML 由模板按结构化数据渲染（v1.5）。
     """
     generated_at = datetime.now()
-    markdown = _build_markdown(members, date, team_name, window, generated_at)
-    html = render_html(_html_structure(members, date, team_name, window, generated_at))
+    markdown = _build_markdown(members, date, team_name, window, generated_at, history)
+    html = render_html(_html_structure(members, date, team_name, window, generated_at,
+                                       history))
     return DailyReport(
         date=date,
         team_name=team_name,
@@ -130,8 +136,8 @@ def generate(members: list[MemberReport], date: date, team_name: str,
 
 def _html_structure(members: list[MemberReport], report_date: date, team_name: str,
                     window: tuple[datetime, datetime] | None,
-                    generated_at: datetime) -> dict:
-    """组装 HTML 模板所需的结构化数据（design.md §6.5 v1.5）；
+                    generated_at: datetime, history: dict | None = None) -> dict:
+    """组装 HTML 模板所需的结构化数据（design.md §6.5 v1.5/v1.6）；
     板块正文与落款在此先行转 HTML，模板不再解析 Markdown。"""
     stats = _overview_stats(members)
     return {
@@ -140,7 +146,8 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "title_date": report_date.isoformat(),
         "date_text": f"{report_date.isoformat()} {WEEKDAYS[report_date.weekday()]}",
         "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
-        "overview_cards": _overview_cards(stats),
+        "week_html": _week_html(history),
+        "overview_cards": _overview_cards(stats, history),
         "member_sections": _member_html_blocks(members),
         "footer_html": _footer_html(members, generated_at),
     }
@@ -148,10 +155,11 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
 
 def _build_markdown(members: list[MemberReport], report_date: date, team_name: str,
                     window: tuple[datetime, datetime] | None,
-                    generated_at: datetime) -> str:
-    """v1.3 结构：头部 → 今日概览 → 成员段落 → 落款。"""
+                    generated_at: datetime, history: dict | None = None) -> str:
+    """v1.3 结构：头部 → 本周概况（v1.6）→ 今日概览 → 成员段落 → 落款。"""
     lines = _render_header(team_name, report_date, window)
-    lines += _render_overview(members)
+    lines += _render_week(history)
+    lines += _render_overview(members, history)
     for member in members:
         lines.extend(_render_member(member))
     lines += _render_footer(members, generated_at)
@@ -192,14 +200,41 @@ def _overview_stats(members: list[MemberReport]) -> dict:
     }
 
 
-def _render_overview(members: list[MemberReport]) -> list[str]:
+def _render_week(history: dict | None) -> list[str]:
+    """本周概况（v1.6，design.md §6.5）：位于今日概览之前，展示本周（周一~当日）
+    提交/变更/活跃天数与较上周对比；history 为 None（无历史数据）时显示
+    「暂无历史数据」，不报错。"""
+    lines = ["## ▎本周概况", ""]
+    if not history:
+        lines += ["- · 暂无历史数据", ""]
+        return lines
+    week = history["week"]
+    lines.append(f"- · 提交 {week['commits']} 次 ｜ 变更 +{week['additions']} / -{week['deletions']} 行")
+    diff = week["commits"] - history["last_week"]["commits"]
+    lines.append(f"- · 活跃 {week['active_days']} 天 ｜ 📈 较上周：提交 {_signed(diff)} 次")
+    lines.append("")
+    return lines
+
+
+def _signed(value: int) -> str:
+    """带符号数字：非负显示 +N，负数显示 -N（v1.6 对比文案「±N」）。"""
+    return f"+{value}" if value >= 0 else f"-{-value}"
+
+
+def _render_overview(members: list[MemberReport], history: dict | None = None) -> list[str]:
     """今日概览（v1.4 修订）：全团队汇总数字，位于成员段落之前；
-    未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。"""
+    未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。
+    v1.6：代码提交行追加「较昨日」对比（无昨日统计时省略）。"""
     stats = _overview_stats(members)
     active = stats["active"]
     lines = ["## ▎今日概览", ""]
     if active["github"]:
-        lines.append(f"- · 代码提交 {stats['commits']} 次，共 +{stats['additions']} / -{stats['deletions']} 行")
+        line = (f"- · 代码提交 {stats['commits']} 次，共 +{stats['additions']}"
+                f" / -{stats['deletions']} 行")
+        if history and history.get("yesterday"):
+            diff = stats["commits"] - history["yesterday"]["commits"]
+            line += f" ｜ 📈 较昨日 {_signed(diff)} 次"
+        lines.append(line)
     if active["lark_task"]:
         lines.append(f"- · 任务进展 {stats['tasks']} 项")
     if active["lark_attendance"]:
@@ -327,16 +362,27 @@ def _render_footer(members: list[MemberReport], generated_at: datetime) -> list[
     return lines
 
 
-def _overview_cards(stats: dict) -> list[dict]:
+def _overview_cards(stats: dict, history: dict | None = None) -> list[dict]:
     """HTML 概览卡片（design.md §6.5 v1.5）：提交次数 / 变更行数 / 讨论条数；
-    仅呈现已接入的源（未接入不出卡片，失败时计数为 0）。"""
+    仅呈现已接入的源（未接入不出卡片，失败时计数为 0）。
+    v1.6：有昨日统计时追加「较昨日提交」卡片（与 Markdown 概览一致）。"""
     cards: list[dict] = []
     if stats["active"]["github"]:
         cards.append({"label": "提交次数", "value": str(stats["commits"])})
         cards.append({"label": "变更行数", "value": f"+{stats['additions']}/-{stats['deletions']}"})
+        if history and history.get("yesterday"):
+            diff = stats["commits"] - history["yesterday"]["commits"]
+            cards.append({"label": "较昨日提交", "value": f"{_signed(diff)} 次"})
     if stats["active"]["lark_msg"]:
         cards.append({"label": "讨论条数", "value": str(stats["messages"])})
     return cards
+
+
+def _week_html(history: dict | None) -> str:
+    """HTML 版本周概况（v1.6）：与 Markdown 板块同源（_render_week），
+    复用成员卡片样式渲染（template.py 包裹），不引入新配色。"""
+    lines = [line for line in _render_week(history) if line.strip()]
+    return markdown_to_html("\n".join(lines))
 
 
 def _member_html_blocks(members: list[MemberReport]) -> list[dict]:

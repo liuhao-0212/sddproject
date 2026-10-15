@@ -636,3 +636,99 @@ def test_markdown_output_unchanged_by_v1_5():
     assert "💻" not in markdown          # 图标仅用于 HTML
     assert "✅ 正常" not in markdown     # 徽章仅用于 HTML
     assert "stat-card" not in markdown   # HTML 组件不进 Markdown
+
+
+# ---------- v1.6：趋势与周报（design.md §6.5） ----------
+
+def _history(**overrides):
+    defaults = dict(
+        week={"start": date(2026, 9, 28), "end": REPORT_DATE, "commits": 12,
+              "additions": 100, "deletions": 40, "active_days": 3},
+        last_week={"start": date(2026, 9, 21), "end": date(2026, 9, 22),
+                   "commits": 8, "additions": 60, "deletions": 30, "active_days": 2},
+        yesterday={"commits": 3, "additions": 20, "deletions": 8},
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_week_summary_rendered_before_today_overview():
+    """v1.6：本周概况板块位于今日概览之前，含提交/变更/活跃天数/较上周对比。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=_history()).markdown
+
+    assert markdown.index("## ▎本周概况") < markdown.index("## ▎今日概览")
+    assert markdown.index("## ▎今日概览") < markdown.index("## ▎张三")  # 既有结构不变
+    assert "· 提交 12 次 ｜ 变更 +100 / -40 行" in markdown
+    assert "· 活跃 3 天 ｜ 📈 较上周：提交 +4 次" in markdown
+
+
+def test_week_summary_negative_diff_shows_minus():
+    """v1.6：本周提交少于上周时「较上周」显示负数。"""
+    history = _history(week={"start": date(2026, 9, 28), "end": REPORT_DATE,
+                             "commits": 5, "additions": 40, "deletions": 20,
+                             "active_days": 2})
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=history).markdown
+
+    assert "· 活跃 2 天 ｜ 📈 较上周：提交 -3 次" in markdown
+
+
+def test_overview_appends_yesterday_comparison():
+    """v1.6：今日概览代码提交行追加「较昨日」对比（今日 1 次 - 昨日 3 次 = -2）。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=_history()).markdown
+
+    assert "· 代码提交 1 次，共 +10 / -3 行 ｜ 📈 较昨日 -2 次" in markdown
+
+
+def test_yesterday_none_omits_comparison():
+    """v1.6：无昨日统计时今日概览不追加对比（仅省略，不影响其余概览行）。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=_history(yesterday=None)).markdown
+
+    assert "· 代码提交 1 次，共 +10 / -3 行" in markdown
+    assert "较昨日" not in markdown
+    assert "· 任务进展 1 项" in markdown  # 其余概览行不变
+
+
+def test_no_history_shows_placeholder_without_error():
+    """v1.6：history 为 None 时本周概况显示「暂无历史数据」，不报错、无对比。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "## ▎本周概况" in markdown
+    assert "· 暂无历史数据" in markdown
+    assert "较昨日" not in markdown
+    assert "较上周" not in markdown
+
+
+def test_history_none_markdown_structure_backward_compatible():
+    """v1.6：history 缺省为 None，除新增本周概况板块外既有结构与内容不变。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.startswith("# 📊 研发一组 智能日报\n\n📅 2026-09-29 周二\n")
+    assert markdown.index("## ▎今日概览") < markdown.index("## ▎张三")
+    assert "### ▪ 代码提交" in markdown
+    assert "🤖 由「智能日报生成器」自动生成" in markdown
+
+
+def test_html_week_section_reuses_card_style_and_shows_comparisons():
+    """v1.6：HTML 本周概况复用成员卡片样式；概览含「较昨日提交」卡片。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组",
+                    history=_history()).html
+
+    assert '<section class="card member-card">' in html
+    assert "▎本周概况" in html
+    assert "提交 12 次 ｜ 变更 +100 / -40 行" in html
+    assert "📈 较上周：提交 +4 次" in html
+    assert '<span class="stat-label">较昨日提交</span>' in html
+    assert '<span class="stat-value">-2 次</span>' in html
+
+
+def test_html_no_history_shows_placeholder_card():
+    """v1.6：无历史数据时 HTML 本周概况卡片显示「暂无历史数据」，无较昨日卡片。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert "▎本周概况" in html
+    assert "暂无历史数据" in html
+    assert "较昨日提交" not in html

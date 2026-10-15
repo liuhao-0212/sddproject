@@ -251,3 +251,14 @@ CollectResult[T]:
 - 响应式：@media (max-width: 600px) 概览卡片改为纵向堆叠
 - 兼容性：用内联/简单 CSS（邮件客户端支持有限，避免 flex 复杂用法时提供降级）
 - Markdown（飞书卡片）**结构不变**，只优化 HTML 模板
+
+**v1.6：趋势与周报**
+- 新增板块「本周概况」（位于今日概览之前）：
+  - 本周（周一 ~ 当日）提交次数、变更行数、活跃天数
+  - 较上周对比（提交次数 ±N）
+- 今日概览增加「较昨日」提示（提交次数 ±N）
+- 数据来源：本地存储的结构化统计（ADR-002）
+  - 新增表 daily_stats(date, team_name, commits_count, additions, deletions, messages_count)
+  - 每次生成日报后写入当天统计
+- 无历史数据时显示「暂无历史数据」，不报错
+- 接口：generate(members, date, team_name, window=None, history=None)

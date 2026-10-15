@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS reports (
     generated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(date);
+-- v1.6（design.md §6.5）：结构化当日统计，供「本周概况 / 较昨日」趋势展示
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date TEXT PRIMARY KEY,
+    team_name TEXT NOT NULL,
+    commits_count INTEGER NOT NULL,
+    additions INTEGER NOT NULL,
+    deletions INTEGER NOT NULL,
+    messages_count INTEGER NOT NULL
+);
 """
 
 
@@ -91,6 +100,36 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 1").fetchone()
         return dict(row) if row else None
+
+    def save_stats(
+        self,
+        stats_date: date | str,
+        team_name: str,
+        commits_count: int,
+        additions: int,
+        deletions: int,
+        messages_count: int,
+    ) -> None:
+        """写入当天统计（v1.6，design.md §6.5）；同一日期重复写入时覆盖（UPSERT）。"""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_stats"
+                " (date, team_name, commits_count, additions, deletions, messages_count)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (self._date_str(stats_date), team_name, commits_count, additions,
+                 deletions, messages_count),
+            )
+
+    def get_stats_between(
+        self, start_date: date | str, end_date: date | str
+    ) -> list[dict[str, Any]]:
+        """查询 [start_date, end_date] 闭区间的统计行（按 date 升序）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM daily_stats WHERE date >= ? AND date <= ? ORDER BY date",
+                (self._date_str(start_date), self._date_str(end_date)),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     @staticmethod
     def _date_str(value: date | str) -> str:

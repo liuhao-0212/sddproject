@@ -141,17 +141,23 @@ def _run(dry_run: bool) -> int:
     members = _aggregate(cfg, commits, tasks, messages,
                          attendance_result.data if attendance_result else [], source_errors)
 
-    # 4) 生成日报（window 为采集窗口，用于头部“数据范围”，v1.3）
-    report = generate(members, today, cfg["team_name"], window=(since, until))
+    # 4) 生成日报（window 为采集窗口，用于头部“数据范围”，v1.3；
+    #    v1.6：先读历史统计组装 history，读不到时传 None，不影响日报生成）
+    history = _load_history(cfg, today, members)
+    report = generate(members, today, cfg["team_name"], window=(since, until), history=history)
 
     if dry_run:
         logger.info("dry-run 模式：跳过推送与落库")
         return 0
 
-    # 5) 落库（日报历史，ADR-002；失败不影响推送）
+    # 5) 落库（日报历史 + 当日统计，ADR-002 / design.md §6.5 v1.6；失败不影响推送）
     try:
-        db_path = cfg.get("storage", {}).get("db_path", "data/report.db")
-        Storage(db_path).save_report(today, cfg["team_name"], report.markdown, report.html)
+        db_path = _db_path(cfg)
+        stats = _today_stats(report.members)
+        storage = Storage(db_path)
+        storage.save_report(today, cfg["team_name"], report.markdown, report.html)
+        storage.save_stats(today, cfg["team_name"], stats["commits"], stats["additions"],
+                           stats["deletions"], stats["messages"])
         logger.info("日报已写入本地存储", extra={"db_path": db_path})
     except ReportError as exc:
         logger.error("日报写入存储失败", extra={"reason": str(exc)}, exc_info=exc)
@@ -281,6 +287,74 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
 def _matches(value: str, *keys: str) -> bool:
     """value 是否等于任一非空 key。"""
     return any(key and value == key for key in keys)
+
+
+def _db_path(cfg: dict) -> str:
+    """SQLite 路径（读历史与落库共用；缺省 data/report.db）。"""
+    return str(cfg.get("storage", {}).get("db_path", "data/report.db"))
+
+
+def _today_stats(members: list[MemberReport]) -> dict[str, int]:
+    """当日统计（v1.6）：提交/增删行数/消息数，写入 daily_stats 并计入本周概况。"""
+    return {
+        "commits": sum(len(m.commits) for m in members),
+        "additions": sum(c.additions for m in members for c in m.commits),
+        "deletions": sum(c.deletions for m in members for c in m.commits),
+        "messages": sum(len(m.messages) for m in members),
+    }
+
+
+def _stats_totals(rows: list[dict]) -> dict[str, int]:
+    """汇总 daily_stats 查询结果（v1.6）；活跃天数 = 有提交或消息的天数。"""
+    return {
+        "commits": sum(r["commits_count"] for r in rows),
+        "additions": sum(r["additions"] for r in rows),
+        "deletions": sum(r["deletions"] for r in rows),
+        "active_days": sum(1 for r in rows if r["commits_count"] or r["messages_count"]),
+    }
+
+
+def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict | None:
+    """v1.6：读取历史统计并组装 history（design.md §6.5）。
+
+    本周区间 = 周一 ~ 当日：数据库读周一 ~ 昨日，再合并当日内存统计
+    （当日统计在生成后才写入，且避免同日重复运行时重复计数）；
+    上周同区间 = 上周一 ~ 上周当日（同天数对比）；昨日单独成行。
+    无历史数据（首次运行）或读取失败时返回 None，不阻断日报流程。
+    """
+    try:
+        storage = Storage(_db_path(cfg))
+        week_start = today - timedelta(days=today.weekday())
+        week_rows = storage.get_stats_between(week_start, today - timedelta(days=1))
+        last_rows = storage.get_stats_between(week_start - timedelta(days=7),
+                                              today - timedelta(days=7))
+        y_rows = storage.get_stats_between(today - timedelta(days=1),
+                                           today - timedelta(days=1))
+    except ReportError as exc:
+        logger.error("读取历史统计失败，本周概况将显示「暂无历史数据」",
+                     extra={"reason": str(exc)}, exc_info=exc)
+        return None
+    if not (week_rows or last_rows or y_rows):
+        return None  # 首次运行：尚无历史统计
+    today_stats = _today_stats(members)
+    week = _stats_totals(week_rows)
+    week["commits"] += today_stats["commits"]
+    week["additions"] += today_stats["additions"]
+    week["deletions"] += today_stats["deletions"]
+    if today_stats["commits"] or today_stats["messages"]:
+        week["active_days"] += 1
+    week["start"] = week_start
+    week["end"] = today
+    last_week = _stats_totals(last_rows)
+    last_week["start"] = week_start - timedelta(days=7)
+    last_week["end"] = today - timedelta(days=7)
+    yesterday_rows = _stats_totals(y_rows)
+    yesterday = None
+    if y_rows:
+        yesterday = {"commits": yesterday_rows["commits"],
+                     "additions": yesterday_rows["additions"],
+                     "deletions": yesterday_rows["deletions"]}
+    return {"week": week, "last_week": last_week, "yesterday": yesterday}
 
 
 def _alert_report(today: date, team_name: str, message: str) -> DailyReport:

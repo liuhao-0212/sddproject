@@ -238,6 +238,21 @@
 - [ ] Markdown / 飞书卡片结构不变
 - [ ] 全部测试通过
 
+## Task 16: 趋势与周报（v1.6）
+描述: 新增「本周概况」板块（本周统计 + 较上周对比）；今日概览加「较昨日」
+输入: design.md §6.5(v1.6)、proposal.md §3.9
+输出: shared/storage.py、main.py、generator/formatter.py、generator/template.py + tests
+依赖: Task 15
+
+验收标准:
+- [ ] storage 新增 daily_stats 表（创建/写入/按日期区间查询）
+- [ ] 日报含「本周概况」（提交次数/变更行数/活跃天数）
+- [ ] 含「较上周」「较昨日」对比
+- [ ] 无历史数据时显示「暂无历史数据」，不报错
+- [ ] HTML 模板同步（新板块用已有卡片样式）
+- [ ] Markdown 输出结构向后兼容
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

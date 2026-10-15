@@ -6,6 +6,8 @@
   其余变量（团队名、日期、卡片数字等）仍由 jinja 自动转义
 - v1.5（design.md §6.5）：深色标题条 → 概览卡片组 → 板块卡片（图标 + 状态徽章）→ 落款；
   邮件客户端兼容优先 table/inline-block，窄屏经 @media 纵向堆叠
+- v1.6：标题条之后新增「本周概况」板块，复用成员卡片样式（.card.member-card，
+  不引入新配色）；正文由 formatter 转换后以 safe 插入
 """
 
 from __future__ import annotations
@@ -65,6 +67,11 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
   <h1>📊 {{ team_name }} {{ report_name }}</h1>
   <p class="report-meta">📅 {{ date_text }}{% if range_text %} · 数据范围 {{ range_text }}{% endif %}</p>
 </header>
+{% if week_html %}
+<section class="card member-card">
+  {{ week_html | safe }}
+</section>
+{% endif %}
 {% if overview_cards %}
 <section class="overview">
   <table class="stat-row" role="presentation" cellpadding="0" cellspacing="0">
