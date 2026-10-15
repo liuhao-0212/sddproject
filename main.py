@@ -317,40 +317,43 @@ def _stats_totals(rows: list[dict]) -> dict[str, int]:
 def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict | None:
     """v1.6：读取历史统计并组装 history（design.md §6.5）。
 
-    本周区间 = 周一 ~ 当日：数据库读周一 ~ 昨日，再合并当日内存统计
-    （当日统计在生成后才写入，且避免同日重复运行时重复计数）；
-    上周同区间 = 上周一 ~ 上周当日（同天数对比）；昨日单独成行。
-    无历史数据（首次运行）或读取失败时返回 None，不阻断日报流程。
+    本周 = 周一 ~ 当日：周一 ~ 昨日读 daily_stats，当日统计由 members 现算
+    （当日统计在生成后才写入，且避免同日重复运行时重复计数），
+    因此本周必然包含今天（design.md §6.5「周一 ~ 当日」）；
+    上周 = 完整的上一自然周（上周一 ~ 上周日）；昨日单独成行。
+    仅当历史为空且当日无任何数据时返回 None（本周概况显示「暂无历史数据」）；
+    读取失败同样返回 None，不阻断日报流程。
     """
     try:
         storage = Storage(_db_path(cfg))
         week_start = today - timedelta(days=today.weekday())
         week_rows = storage.get_stats_between(week_start, today - timedelta(days=1))
         last_rows = storage.get_stats_between(week_start - timedelta(days=7),
-                                              today - timedelta(days=7))
+                                              week_start - timedelta(days=1))
         y_rows = storage.get_stats_between(today - timedelta(days=1),
                                            today - timedelta(days=1))
     except ReportError as exc:
         logger.error("读取历史统计失败，本周概况将显示「暂无历史数据」",
                      extra={"reason": str(exc)}, exc_info=exc)
         return None
-    if not (week_rows or last_rows or y_rows):
-        return None  # 首次运行：尚无历史统计
     today_stats = _today_stats(members)
+    today_active = bool(today_stats["commits"] or today_stats["messages"])
+    if not (week_rows or last_rows or y_rows) and not today_active:
+        return None  # 历史为空且当日无数据：没有可展示的趋势
     week = _stats_totals(week_rows)
     week["commits"] += today_stats["commits"]
     week["additions"] += today_stats["additions"]
     week["deletions"] += today_stats["deletions"]
-    if today_stats["commits"] or today_stats["messages"]:
+    if today_active:
         week["active_days"] += 1
     week["start"] = week_start
     week["end"] = today
     last_week = _stats_totals(last_rows)
     last_week["start"] = week_start - timedelta(days=7)
-    last_week["end"] = today - timedelta(days=7)
-    yesterday_rows = _stats_totals(y_rows)
+    last_week["end"] = week_start - timedelta(days=1)
     yesterday = None
     if y_rows:
+        yesterday_rows = _stats_totals(y_rows)
         yesterday = {"commits": yesterday_rows["commits"],
                      "additions": yesterday_rows["additions"],
                      "deletions": yesterday_rows["deletions"]}

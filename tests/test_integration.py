@@ -573,9 +573,24 @@ def test_history_from_storage_feeds_week_and_yesterday(monkeypatch, env):
     assert '<span class="stat-label">较昨日提交</span>' in report.html
 
 
-def test_no_history_first_run_shows_placeholder(monkeypatch, env):
-    """首次运行无历史统计：本周概况显示「暂无历史数据」，不报错、无较昨日。"""
-    stub_sources(monkeypatch, commits=[make_commit()])
+def test_today_only_data_shows_week_summary(monkeypatch, env):
+    """v1.6：历史为空但今天有数据 → 本周概况显示今日统计（活跃天数 ≥ 1），
+    而非「暂无历史数据」（本周必须包含今天，design.md §6.5「周一 ~ 当日」）。"""
+    stub_sources(monkeypatch, commits=[make_commit()], messages=[make_message()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "· 提交 1 次 ｜ 变更 +10 / -3 行" in report.markdown
+    assert "· 活跃 1 天 ｜ 📈 较上周：提交 +1 次" in report.markdown  # 上周无数据
+    assert "暂无历史数据" not in report.markdown
+    assert "较昨日" not in report.markdown  # 无昨日统计
+
+
+def test_no_data_today_and_no_history_shows_placeholder(monkeypatch, env):
+    """v1.6：历史为空且今天无任何数据 → 本周概况显示「暂无历史数据」，不报错。"""
+    stub_sources(monkeypatch)  # 各源均正常但无数据
 
     rc = main.run(dry_run=False)
 
@@ -585,6 +600,22 @@ def test_no_history_first_run_shows_placeholder(monkeypatch, env):
     assert "· 暂无历史数据" in report.markdown
     assert "较昨日" not in report.markdown
     assert "暂无历史数据" in report.html  # HTML 同步显示占位文案
+
+
+def test_last_week_covers_full_natural_week(monkeypatch, env):
+    """v1.6：上周 = 完整的上一自然周（上周一 ~ 上周日），较上周按整周对比。"""
+    env["stats_rows"] = [{
+        "date": "2026-09-27", "team_name": "研发一组", "commits_count": 5,
+        "additions": 50, "deletions": 10, "messages_count": 1,
+    }]  # 上周日（上一自然周 2026-09-21 ~ 09-27 内）
+    stub_sources(monkeypatch, commits=[make_commit()])
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "· 提交 1 次 ｜ 变更 +10 / -3 行" in report.markdown  # 本周只有今天
+    assert "· 活跃 1 天 ｜ 📈 较上周：提交 -4 次" in report.markdown  # 1 - 5
 
 
 def test_history_read_failure_does_not_block_report(monkeypatch, env, caplog):
