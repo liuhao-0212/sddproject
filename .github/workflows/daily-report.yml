@@ -1,0 +1,76 @@
+# =============================================================================
+# 定时任务：每天 08:00（北京时间）生成并推送日报
+#
+# 这个系统本身不需要常驻服务，生产形态就是"定时调用一次 CLI"：
+#   - 定时触发：schedule（UTC 时间，00:00 UTC = 08:00 Asia/Shanghai）
+#   - 手动触发：workflow_dispatch（支持 dry-run 演练）
+#   - 失败可见：失败会体现在 Actions 红点上，并保留日志与产物
+# =============================================================================
+name: Daily Report
+
+on:
+  schedule:
+    - cron: "0 0 * * *"        # UTC 00:00 = 北京时间 08:00（注意：GitHub cron 用 UTC）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只生成不推送（演练）
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 定时任务绝不并发：两个日报同时推送会造成重复消息
+concurrency:
+  group: daily-report
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  generate:
+    name: 生成并推送日报
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装锁定依赖
+        run: uv sync --frozen
+      - name: 准备配置
+        env:
+          CONFIG_YAML: ${{ secrets.CONFIG_YAML }}
+        run: printf '%s' "$CONFIG_YAML" > config.yaml
+      - name: 生成并推送
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          LARK_BOT_WEBHOOK_URL: ${{ secrets.LARK_BOT_WEBHOOK_URL }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            uv run python main.py --dry-run
+          else
+            uv run python main.py
+          fi
+      - name: 归档当天日报
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ github.run_id }}
+          path: |
+            output/
+            data/
+          retention-days: 90
+          if-no-files-found: ignore
+      - name: 失败告警
+        if: failure()
+        run: |
+          echo "::error::日报生成失败：请检查 Secrets 有效期、数据源可用性与日志"

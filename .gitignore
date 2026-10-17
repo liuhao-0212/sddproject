@@ -14,3 +14,8 @@ data/
 output/
 *.db
 specs/.ai-edit-allow
+
+# ---- CI/CD 产物：运行时生成，不该入库 ----
+dist/
+environments/
+reports/
