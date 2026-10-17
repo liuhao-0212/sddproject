@@ -5,10 +5,14 @@ from datetime import date, datetime, time
 import main
 from collector import lark_attendance
 
+# 采集窗口必须带时区（design.md §6.4）：naive 时间会被 GitHub 按其他时区解释，
+# 导致当天的提交被排除。这里与 main.py 的窗口构造保持一致。
+LOCAL_TZ = datetime.now().astimezone().tzinfo
+
 cfg = main.load_config()
 today = date.today()
-since = datetime.combine(today, time.min)
-until = datetime.now()
+since = datetime.combine(today, time.min, tzinfo=LOCAL_TZ)
+until = datetime.now(LOCAL_TZ)
 
 commits = main.github.collect(cfg["collector"]["github"]["repos"], since, until)
 tasks = main.lark_task.collect(cfg["collector"]["lark_task"]["project_id"], since, until)
@@ -27,7 +31,7 @@ source_errors = {
 }
 
 members = main._aggregate(cfg, commits, tasks, messages, attendance, source_errors)
-report = main.generate(members, today, cfg["team_name"])
+report = main.generate(members, today, cfg["team_name"], window=(since, until))
 
 os.makedirs("output", exist_ok=True)
 with open("output/demo-report.md", "w", encoding="utf-8") as f:

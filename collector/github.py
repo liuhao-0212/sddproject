@@ -107,6 +107,11 @@ def _collect_repo(client: httpx.Client, repo: str, since: datetime, until: datet
 
     records: list[CommitRecord] = []
     for raw in raw_commits:
+        # 合并提交会把同一批改动再统计一遍（父提交 > 1），跳过以免行数翻倍
+        parents = raw.get("parents")
+        if isinstance(parents, list) and len(parents) > 1:
+            logger.info("跳过合并提交", extra={"repo": repo, "sha": raw.get("sha")})
+            continue
         parsed = _parse_commit(raw, repo)
         if parsed is None:
             continue
