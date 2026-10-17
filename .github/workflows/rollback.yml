@@ -1,0 +1,52 @@
+# =============================================================================
+# 回滚：也是流水线，不是"上服务器手敲命令"
+#
+# 发布出问题时，值班同学点一下 Run workflow，选择环境与目标发布号。
+# 回滚只切换 current 指针（不可变制品 + 发布历史），几秒内完成，且全程留痕。
+# =============================================================================
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 要回滚的环境
+        type: choice
+        options: [prod, staging]
+        default: prod
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: 回滚 ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: 取回发布历史
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: production-release-${{ github.run_id }}
+          path: .
+      - name: 回滚到上一个发布
+        run: uv run python pipeline/tools/rollback.py --project . --env "${{ inputs.environment }}"
+      - name: 回滚后验证
+        run: |
+          RELEASE=$(cat "environments/${{ inputs.environment }}/current.txt")
+          echo "当前生效发布：$RELEASE"
+          uv run python pipeline/tools/report_smoke.py \
+            --app-dir "environments/${{ inputs.environment }}/releases/$RELEASE" \
+            --fixture pipeline/fixtures/sample-day.json \
+            --out "reports/rollback-${{ inputs.environment }}"

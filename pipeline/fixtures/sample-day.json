@@ -1,0 +1,68 @@
+{
+  "team_name": "研发一组",
+  "date": "2026-10-16",
+  "members": [
+    {
+      "name": "张三",
+      "github_username": "zhangsan",
+      "commits": [
+        {
+          "author": "zhangsan",
+          "message": "feat: 日报模板支持四段式排版",
+          "timestamp": "2026-10-16T09:12:00+08:00",
+          "repo": "org/repo-a",
+          "additions": 128,
+          "deletions": 9,
+          "files_changed": 5
+        },
+        {
+          "author": "zhangsan",
+          "message": "fix: 修正时区转换导致的日期偏移",
+          "timestamp": "2026-10-16T15:40:00+08:00",
+          "repo": "org/repo-a",
+          "additions": 12,
+          "deletions": 3,
+          "files_changed": 2
+        }
+      ],
+      "tasks": [
+        {
+          "assignee": "zhangsan",
+          "title": "日报模板四段式改造",
+          "status_from": "进行中",
+          "status_to": "已完成",
+          "updated_at": "2026-10-16T16:30:00+08:00"
+        }
+      ],
+      "messages": [
+        {
+          "sender": "lisi",
+          "content": "登录联调已通过，明天可以进入评审",
+          "timestamp": "2026-10-16T17:05:00+08:00",
+          "chat_name": "研发一组"
+        }
+      ],
+      "attendance": {
+        "employee_id": "zhangsan@company.com",
+        "date": "2026-10-16",
+        "check_in": "2026-10-16T09:02:00+08:00",
+        "check_out": "2026-10-16T19:31:00+08:00",
+        "work_hours": 9.5,
+        "status": "正常"
+      },
+      "source_errors": {}
+    },
+    {
+      "name": "李四",
+      "github_username": "lisi-dev",
+      "commits": [],
+      "tasks": [],
+      "messages": [],
+      "attendance": null,
+      "source_errors": {
+        "github": "GitHub 凭据未配置",
+        "lark_msg": "飞书接口连接失败"
+      }
+    }
+  ]
+}

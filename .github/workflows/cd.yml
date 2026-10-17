@@ -1,0 +1,137 @@
+# =============================================================================
+# CD：持续交付 / 持续部署
+#
+# 触发：CI 在 main 上成功后自动进入；也可以手动运行。
+# 路径：构建制品 → 部署预发 → 冒烟 + 日报质量门禁 → 生产审批门禁 → 部署生产 → 发布后验证
+#
+# 两条"硬规矩"：
+#   1) 生产环境的作业必须挂 environment: production，并配置 required reviewers；
+#      没有审批，任何代码都进不了生产。
+#   2) 预发验证过的那个 zip（同一个 sha256）才是生产要部署的制品；
+#      生产阶段用 download-artifact 取回来，绝不重新构建。
+# =============================================================================
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+# 发布不能并行、不能被新提交取消：同一时刻只允许一条发布流水线
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 预发：先在小流量/无真实用户的环境里把"制品 + 配置 + 依赖"跑一遍
+  # ---------------------------------------------------------------------------
+  staging:
+    name: 部署预发 + 冒烟
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装锁定依赖
+        run: uv sync --frozen
+      - name: 准备配置（配置含内部 ID，按敏感信息处理）
+        env:
+          CONFIG_YAML: ${{ secrets.CONFIG_YAML }}
+        run: printf '%s' "$CONFIG_YAML" > config.yaml
+      - name: 构建制品
+        run: uv run python pipeline/tools/build_artifact.py --project . --out dist
+      - name: 部署到预发（--expect-sha 校验制品完整性）
+        run: |
+          SHA=$(uv run python -c "import json;print(json.load(open('dist/build-info.json'))['artifact_sha256'])")
+          ART=$(uv run python -c "import json;print(json.load(open('dist/build-info.json'))['artifact'])")
+          uv run python pipeline/tools/deploy.py --project . --env staging --artifact "$ART" --expect-sha "$SHA"
+      - name: 冒烟测试（固定数据集调用已部署代码）
+        run: |
+          RELEASE=$(cat environments/staging/current.txt)
+          uv run python pipeline/tools/report_smoke.py \
+            --app-dir "environments/staging/releases/$RELEASE" \
+            --fixture pipeline/fixtures/sample-day.json \
+            --out reports/smoke-staging
+      - name: 日报质量门禁
+        run: |
+          uv run python pipeline/tools/report_check.py \
+            --markdown reports/smoke-staging/daily-report-2026-10-16.md \
+            --html reports/smoke-staging/daily-report-2026-10-16.html \
+            --expect-team "研发一组" --expect-date 2026-10-16
+      - name: 上传待发布制品与验证产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifact
+          path: |
+            dist/*.zip
+            dist/build-info.json
+            reports/smoke-staging/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 生产：审批通过后，部署"预发验证过的同一个制品"
+  # ---------------------------------------------------------------------------
+  production:
+    name: 部署生产 + 发布后验证
+    needs: staging
+    runs-on: ubuntu-latest
+    environment:
+      name: production          # ← 在仓库 Settings → Environments 里配置 required reviewers
+      url: https://report.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装锁定依赖
+        run: uv sync --frozen
+      - name: 准备配置
+        env:
+          CONFIG_YAML: ${{ secrets.CONFIG_YAML }}
+        run: printf '%s' "$CONFIG_YAML" > config.yaml
+      - name: 取回预发阶段的制品（不重新构建）
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifact
+          path: .
+      - name: 部署到生产
+        run: |
+          SHA=$(uv run python -c "import json;print(json.load(open('dist/build-info.json'))['artifact_sha256'])")
+          ART=$(uv run python -c "import json;print(json.load(open('dist/build-info.json'))['artifact'])")
+          uv run python pipeline/tools/deploy.py --project . --env prod --artifact "$ART" --expect-sha "$SHA"
+      - name: 发布后验证
+        run: |
+          RELEASE=$(cat environments/prod/current.txt)
+          uv run python pipeline/tools/report_smoke.py \
+            --app-dir "environments/prod/releases/$RELEASE" \
+            --fixture pipeline/fixtures/sample-day.json \
+            --out reports/verify-prod
+          uv run python pipeline/tools/report_check.py \
+            --markdown reports/verify-prod/daily-report-2026-10-16.md \
+            --html reports/verify-prod/daily-report-2026-10-16.html \
+            --expect-team "研发一组" --expect-date 2026-10-16
+      - name: 归档发布证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-${{ github.run_id }}
+          path: |
+            reports/verify-prod/
+            environments/prod/history.jsonl
+          if-no-files-found: ignore
