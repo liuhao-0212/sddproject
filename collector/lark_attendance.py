@@ -107,8 +107,12 @@ def collect(since: date, until: date) -> CollectResult[AttendanceRecord]:
     try:
         return _collect_inner(since, until)
     except (CollectorError, ConfigError) as exc:
-        logger.error("飞书考勤数据源采集失败", extra={"reason": str(exc)}, exc_info=exc)
-        return CollectResult(success=False, data=[], error=str(exc))
+        reason = str(exc)
+        # 404 通常表示该租户没有开通「考勤」模块：按"未接入"处理，日报里隐藏该板块
+        if "404" in reason:
+            reason = "飞书考勤模块未开通（接口返回 404），已跳过"
+        logger.error("飞书考勤数据源采集失败", extra={"reason": reason}, exc_info=exc)
+        return CollectResult(success=False, data=[], error=reason)
     except Exception as exc:  # 兜底：任何失败不得逃逸出 collect()（design.md §6.1 原则 1）
         logger.error("飞书考勤采集发生未预期异常", extra={"reason": str(exc)}, exc_info=exc)
         return CollectResult(success=False, data=[], error=str(exc))
