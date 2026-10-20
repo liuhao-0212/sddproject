@@ -1,9 +1,14 @@
 """查看日报内容（v1.1：含工时统计）。"""
 import os
+import sys
 from datetime import date, datetime, time
 
 import main
 from collector import lark_attendance
+
+# GBK 控制台（Windows）无法输出 emoji：显式切换 stdout 为 UTF-8（与 scripts/*.py 一致）
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # 采集窗口必须带时区（design.md §6.4）：naive 时间会被 GitHub 按其他时区解释，
 # 导致当天的提交被排除。这里与 main.py 的窗口构造保持一致。
