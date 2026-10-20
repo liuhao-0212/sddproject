@@ -16,6 +16,9 @@
   → 板块卡片（图标 + 状态徽章）→ 落款；Markdown 输出保持 v1.3/v1.4 结构不变
 - v1.6：新增「本周概况」板块（位于今日概览之前，含较上周对比）；今日概览代码提交行
   追加「较昨日」对比；history 为 None 时显示「暂无历史数据」，不报错
+- v1.8：提交按 Conventional Commits 归类（generator/classify.py）；概览追加「工作分类」
+  行；成员提交板块按类别分组（组内时间升序）；新增「今日亮点」板块（今日概览之后、
+  成员段落之前，最多 3 条、无提交不渲染）；generate(...) 签名不变
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -30,6 +33,7 @@ from collector.github import CommitRecord
 from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
+from generator.classify import (CATEGORY_BY_KEY, CATEGORY_ORDER, classify_commits)
 from generator.template import render_html
 
 # 数据源展示顺序：概览/落款与正文板块顺序一致（代码提交 → 任务进展 → 工时统计 → 协作沟通）
@@ -148,6 +152,7 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
         "week_html": _week_html(history),
         "overview_cards": _overview_cards(stats, history),
+        "highlights_html": _highlights_html(members),
         "member_sections": _member_html_blocks(members),
         "footer_html": _footer_html(members, generated_at),
     }
@@ -156,10 +161,12 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
 def _build_markdown(members: list[MemberReport], report_date: date, team_name: str,
                     window: tuple[datetime, datetime] | None,
                     generated_at: datetime, history: dict | None = None) -> str:
-    """v1.3 结构：头部 → 本周概况（v1.6）→ 今日概览 → 成员段落 → 落款。"""
+    """v1.3 结构：头部 → 本周概况（v1.6）→ 今日概览 → 今日亮点（v1.8）
+    → 成员段落 → 落款。"""
     lines = _render_header(team_name, report_date, window)
     lines += _render_week(history)
     lines += _render_overview(members, history)
+    lines += _render_highlights(members)
     for member in members:
         lines.extend(_render_member(member))
     lines += _render_footer(members, generated_at)
@@ -179,16 +186,16 @@ def _render_header(team_name: str, report_date: date,
 
 
 def _overview_stats(members: list[MemberReport]) -> dict:
-    """全团队汇总数字与各源可用性（Markdown 概览与 HTML 概览卡片共用，v1.5）。"""
-    errors: dict[str, str] = {}
-    for member in members:
-        for source, reason in member.source_errors.items():
-            errors.setdefault(source, reason)  # 编排层为所有成员填充同一份 source_errors
+    """全团队汇总数字与各源可用性（Markdown 概览与 HTML 概览卡片共用，v1.5）。
+
+    active 按成员聚合（v1.8 修订）：任一成员已接入即视为团队激活——个别成员
+    未配置不再掩盖其他成员的数据；members 为空时所有源视为未激活。
+    """
     attended = [m.attendance for m in members
                 if m.attendance is not None
                 and m.attendance.check_in and m.attendance.check_out]
     return {
-        "active": {source: not _is_not_configured(errors.get(source, ""))
+        "active": {source: source in _configured_sources(members)
                    for source, _label in SOURCE_ORDER},
         "commits": sum(len(m.commits) for m in members),
         "additions": sum(c.additions for m in members for c in m.commits),
@@ -224,7 +231,8 @@ def _signed(value: int) -> str:
 def _render_overview(members: list[MemberReport], history: dict | None = None) -> list[str]:
     """今日概览（v1.4 修订）：全团队汇总数字，位于成员段落之前；
     未接入的源整行不输出；已接入的源始终保留一行（不可用/无数据时计数为 0）。
-    v1.6：代码提交行追加「较昨日」对比（无昨日统计时省略）。"""
+    v1.6：代码提交行追加「较昨日」对比（无昨日统计时省略）。
+    v1.8：有提交时在代码提交行之后追加「工作分类」行（固定顺序，只列非零）。"""
     stats = _overview_stats(members)
     active = stats["active"]
     lines = ["## ▎今日概览", ""]
@@ -235,6 +243,8 @@ def _render_overview(members: list[MemberReport], history: dict | None = None) -
             diff = stats["commits"] - history["yesterday"]["commits"]
             line += f" ｜ 📈 较昨日 {_signed(diff)} 次"
         lines.append(line)
+        if stats["commits"]:
+            lines.append(_work_categories_line(members))
     if active["lark_task"]:
         lines.append(f"- · 任务进展 {stats['tasks']} 项")
     if active["lark_attendance"]:
@@ -243,6 +253,23 @@ def _render_overview(members: list[MemberReport], history: dict | None = None) -
         lines.append(f"- · 协作沟通 {stats['messages']} 条")
     lines.append("")
     return lines
+
+
+def _category_counts(members: list[MemberReport]) -> dict[str, int]:
+    """全团队各类别提交数（v1.8，与提交板块分组共用 classify_commits）。"""
+    counts = {key: 0 for key in CATEGORY_ORDER}
+    for member in members:
+        for key, commits in classify_commits(member.commits).items():
+            counts[key] += len(commits)
+    return counts
+
+
+def _work_categories_line(members: list[MemberReport]) -> str:
+    """概览「工作分类」行（v1.8，design.md §6.5）：按固定类别顺序只列非零项。"""
+    counts = _category_counts(members)
+    parts = [f"{CATEGORY_BY_KEY[key].icon} {CATEGORY_BY_KEY[key].label} {counts[key]}"
+             for key in CATEGORY_ORDER if counts[key]]
+    return "- · 工作分类：" + " ｜ ".join(parts)
 
 
 def _member_sections(member: MemberReport) -> list[tuple[str, str, list[str]]]:
@@ -272,6 +299,38 @@ def _render_member(member: MemberReport) -> list[str]:
     return lines
 
 
+def _render_highlights(members: list[MemberReport]) -> list[str]:
+    """今日亮点（v1.8，design.md §6.5）：团队级板块，位于今日概览之后、成员段落之前。
+
+    每类只取全团队最新一条（同类取最新），按优先级（feat > fix > perf > refactor
+    > 其他）排序后最多取 3 条；当天无提交时返回空列表（板块不渲染）。
+    """
+    newest: dict[str, tuple[CommitRecord, MemberReport]] = {}
+    for member in members:
+        for key, commits in classify_commits(member.commits).items():
+            if not commits:
+                continue
+            latest = max(commits, key=lambda c: c.timestamp)
+            current = newest.get(key)
+            if current is None or latest.timestamp > current[0].timestamp:
+                newest[key] = (latest, member)
+    if not newest:
+        return []
+    candidates = []
+    for key in CATEGORY_ORDER:
+        if key in newest:
+            commit, member = newest[key]
+            candidates.append((CATEGORY_BY_KEY[key], commit, member))
+    candidates.sort(key=lambda item: item[0].priority)  # 显式按优先级排序（与固定顺序一致）
+    lines = ["## ▎今日亮点", ""]
+    for category, commit, member in candidates[:3]:
+        title = commit.message.splitlines()[0].strip()  # 标题行；trailer 在正文中
+        lines.append(f"- · {category.icon} {title}（{member.name}，"
+                     f"+{commit.additions}/-{commit.deletions} 行）")
+    lines.append("")
+    return lines
+
+
 def _render_commits(member: MemberReport) -> list[str]:
     if _unconfigured(member, "github"):
         return []  # 未接入：板块不渲染（design.md §6.5）
@@ -283,9 +342,16 @@ def _render_commits(member: MemberReport) -> list[str]:
     additions = sum(c.additions for c in commits)
     deletions = sum(c.deletions for c in commits)
     lines = [f"- · 今日 {len(commits)} 次提交，共 +{additions} / -{deletions} 行"]
-    for commit in commits:
-        title = commit.message.splitlines()[0].strip()  # 标题行；trailer（Co-Authored-By 等）在正文中
-        lines.append(f"- · {title}（+{commit.additions}/-{commit.deletions} 行）")
+    # v1.8：按类别分组（design.md §6.5）：组顺序固定，组内按提交时间升序，空类别不输出
+    groups = classify_commits(commits)
+    for key in CATEGORY_ORDER:
+        if not groups[key]:
+            continue
+        category = CATEGORY_BY_KEY[key]
+        lines.append(f"- · {category.icon} {category.label}（{len(groups[key])}）")
+        for commit in sorted(groups[key], key=lambda c: c.timestamp):
+            title = commit.message.splitlines()[0].strip()  # 标题行；trailer（Co-Authored-By 等）在正文中
+            lines.append(f"  - {title}（+{commit.additions}/-{commit.deletions} 行）")
     lines.append("")
     return lines
 
@@ -349,13 +415,9 @@ def _render_attendance(member: MemberReport) -> list[str]:
 
 
 def _render_footer(members: list[MemberReport], generated_at: datetime) -> list[str]:
-    """落款（v1.4 修订）：🤖 生成器署名；数据来源列出所有已接入的源（含不可用）｜ 生成时间。"""
-    errors: dict[str, str] = {}
-    for member in members:
-        for source, reason in member.source_errors.items():
-            errors.setdefault(source, reason)  # 编排层为所有成员填充同一份 source_errors
-    sources = [label for key, label in SOURCE_ORDER
-               if not _is_not_configured(errors.get(key, ""))]
+    """落款（v1.4 修订）：🤖 生成器署名；数据来源列出所有团队级已接入的源
+    （任一成员已接入即列出，含不可用，v1.8 修订）｜ 生成时间。"""
+    sources = [label for key, label in SOURCE_ORDER if key in _configured_sources(members)]
     lines = ["---", "", "🤖 由「智能日报生成器」自动生成", ""]
     lines.append(f"数据来源：{'、'.join(sources)} ｜ 生成时间 {generated_at:%Y-%m-%d %H:%M}")
     lines.append("")
@@ -382,6 +444,13 @@ def _week_html(history: dict | None) -> str:
     """HTML 版本周概况（v1.6）：与 Markdown 板块同源（_render_week），
     复用成员卡片样式渲染（template.py 包裹），不引入新配色。"""
     lines = [line for line in _render_week(history) if line.strip()]
+    return markdown_to_html("\n".join(lines))
+
+
+def _highlights_html(members: list[MemberReport]) -> str:
+    """HTML 版今日亮点（v1.8）：与 Markdown 板块同源（_render_highlights），
+    复用成员卡片样式渲染（template.py 包裹），不引入新配色；无提交时为空串。"""
+    lines = [line for line in _render_highlights(members) if line.strip()]
     return markdown_to_html("\n".join(lines))
 
 
@@ -418,6 +487,16 @@ def _unconfigured(member: MemberReport, source: str) -> bool:
 def _is_not_configured(reason: str) -> bool:
     """是否属于「未接入」（缺凭据/未授权/占位值）类原因（design.md §6.5）。"""
     return any(keyword in reason for keyword in NOT_CONFIGURED_KEYWORDS)
+
+
+def _configured_sources(members: list[MemberReport]) -> set[str]:
+    """团队级已接入的数据源（v1.8 修订）：任一成员已接入即视为团队激活。
+
+    仅影响概览与落款的团队级展示；成员板块仍按成员单独判定
+    （未接入的成员板块不渲染，规则不变）。
+    """
+    return {source for source, _label in SOURCE_ORDER
+            for member in members if not _unconfigured(member, source)}
 
 
 def _friendly_reason(err: str) -> str:
@@ -462,8 +541,10 @@ def markdown_to_html(markdown: str) -> str:
             level = len(heading.group(1))
             out.append(f"<h{level}>{_inline(heading.group(2))}</h{level}>")
             continue
-        if line.startswith("- "):
-            list_buffer.append(line[2:])
+        # 兼容带缩进的子条目（v1.8 提交分组 `  - …`）：去掉行首空白与 `- ` 后作为条目
+        item = re.match(r"^\s*-\s+(.*)$", line)
+        if item:
+            list_buffer.append(item.group(1))
             continue
         flush_list()
         out.append(f"<p>{_inline(line)}</p>")

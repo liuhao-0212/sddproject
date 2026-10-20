@@ -269,6 +269,21 @@
 - [ ] --check / --dry-run / 无参数行为不变
 - [ ] 全部测试通过
 
+## Task 18: 日报内容智能化（v1.8）
+描述: 提交按 Conventional Commits 归类；概览新增「工作分类」；成员提交板块分组；新增「今日亮点」板块
+输入: design.md §6.5(v1.8)、proposal.md §3.11
+输出: generator/classify.py（新增）、generator/formatter.py、generator/template.py、tests（新增 + 更新）
+依赖: Task 17
+
+验收标准:
+- [ ] classify_commit 处理 feat/fix/perf/refactor/docs/test/ci/build/chore/style、scope、`!`、无前缀
+- [ ] 概览「工作分类」行按固定顺序只列非零项；无提交时不显示
+- [ ] 提交板块按类别分组，组内按时间升序，组顺序固定
+- [ ] 「今日亮点」最多 3 条，优先级 feat > fix > perf > refactor > 其他，同类取最新
+- [ ] 无提交时「今日亮点」板块不渲染（Markdown 与 HTML 一致）
+- [ ] HTML 新板块复用现有卡片样式，无新增配色
+- [ ] 既有测试全绿，新增分类/亮点用例
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

@@ -86,7 +86,8 @@ def test_markdown_contains_member_and_section_titles():
 def test_markdown_renders_commits_with_stats():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
     assert "· 今日 1 次提交，共 +10 / -3 行" in markdown
-    assert "· feat: 登录页（+10/-3 行）" in markdown
+    assert "· ✨ 新功能（1）" in markdown  # v1.8：按类别分组，组头带类别图标
+    assert "  - feat: 登录页（+10/-3 行）" in markdown
     assert "— 08:30" not in markdown  # v1.3：提交只留标题 + 行数，不展示时间等细节
 
 
@@ -119,7 +120,8 @@ def test_commit_renders_title_line_only():
         timestamp=datetime(2026, 9, 29, 8, 30, tzinfo=TZ), repo="org/repo")])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "· line1（+0/-0 行）" in markdown
+    assert "· 📦 其他（1）" in markdown  # v1.8：无 Conventional 前缀归「其他」
+    assert "  - line1（+0/-0 行）" in markdown
     assert "line2" not in markdown
     assert "Co-Authored-By" not in markdown
 
@@ -292,8 +294,10 @@ def test_commit_summary_line_aggregates_totals():
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
     assert "· 今日 2 次提交，共 +30 / -9 行" in markdown
-    assert "· feat: A（+10/-3 行）" in markdown
-    assert "· fix: B（+20/-6 行）" in markdown
+    assert "· ✨ 新功能（1）" in markdown  # v1.8：类别分组
+    assert "  - feat: A（+10/-3 行）" in markdown
+    assert "· 🐛 修复（1）" in markdown
+    assert "  - fix: B（+20/-6 行）" in markdown
 
 
 def test_commit_item_hides_repo_and_file_count():
@@ -732,3 +736,151 @@ def test_html_no_history_shows_placeholder_card():
     assert "▎本周概况" in html
     assert "暂无历史数据" in html
     assert "较昨日提交" not in html
+
+
+# ---------- v1.8：日报内容智能化（design.md §6.5） ----------
+
+def _commit(message, additions=10, deletions=3, hour=8):
+    return CommitRecord(author="zhangsan", message=message,
+                        timestamp=datetime(2026, 9, 29, hour, 0, tzinfo=TZ),
+                        repo="org/repo", additions=additions, deletions=deletions,
+                        files_changed=1)
+
+
+def test_overview_shows_work_categories_nonzero_only():
+    """v1.8：概览「工作分类」行按固定顺序只列非零类别。"""
+    member = make_member(commits=[_commit("feat: A"), _commit("fix: B"),
+                                  _commit("feat: C"), _commit("更新依赖")])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 工作分类：✨ 新功能 2 ｜ 🐛 修复 1 ｜ 📦 其他 1" in markdown
+
+
+def test_overview_work_categories_fixed_order():
+    """v1.8：类别按固定顺序输出，与提交时间先后无关。"""
+    member = make_member(commits=[_commit("fix: B", hour=9), _commit("feat: A", hour=8)])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 工作分类：✨ 新功能 1 ｜ 🐛 修复 1" in markdown
+
+
+def test_overview_no_work_categories_without_commits():
+    member = make_member(commits=[])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "工作分类" not in markdown
+
+
+def test_commits_grouped_by_category_time_ascending():
+    """v1.8：提交板块按类别分组，组顺序固定，组内按提交时间升序。"""
+    member = make_member(commits=[_commit("fix: B", hour=9), _commit("feat: A", hour=8),
+                                  _commit("feat: C", hour=10)])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 今日 3 次提交，共 +30 / -9 行" in markdown
+    assert "· ✨ 新功能（2）" in markdown
+    assert "  - feat: A（+10/-3 行）" in markdown
+    assert "  - feat: C（+10/-3 行）" in markdown
+    assert "· 🐛 修复（1）" in markdown
+    assert "  - fix: B（+10/-3 行）" in markdown
+    # 组顺序固定：feat 组在 fix 组之前
+    assert markdown.index("· ✨ 新功能（2）") < markdown.index("· 🐛 修复（1）")
+    # 组内按时间升序（比较提交板块内的完整子条目，避开「今日亮点」里的同款标题）
+    assert markdown.index("  - feat: A（+10/-3 行）") < markdown.index("  - feat: C（+10/-3 行）")
+
+
+def test_highlights_max3_by_priority_newest_per_category():
+    """v1.8：今日亮点最多 3 条，按优先级取；同类取最新（feat 取 C 不取 A）。"""
+    member = make_member(commits=[
+        _commit("feat: A", hour=8), _commit("feat: C", hour=11),
+        _commit("fix: B", hour=9), _commit("perf: D", hour=10),
+        _commit("refactor: E", hour=7), _commit("更新依赖", hour=12),
+    ])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.index("## ▎今日亮点") < markdown.index("## ▎张三")  # 概览之后、成员之前
+    highlight_block = markdown.split("## ▎今日亮点")[1].split("## ▎张三")[0]
+    assert highlight_block.count("- · ") == 3  # 最多 3 条
+    assert "· ✨ feat: C（张三，+10/-3 行）" in highlight_block
+    assert "· 🐛 fix: B（张三，+10/-3 行）" in highlight_block
+    assert "· ⚡ perf: D（张三，+10/-3 行）" in highlight_block
+    assert "refactor" not in highlight_block  # 超出 3 条被截断
+    assert "feat: A" not in highlight_block   # 同类只取最新
+
+
+def test_highlights_same_category_across_members_takes_newest():
+    """v1.8：同类取最新按全团队比较，与成员无关。"""
+    m1 = make_member(commits=[_commit("feat: 张三早", hour=8)])
+    m2 = make_member(name="李四", github_username="lisi",
+                     commits=[_commit("feat: 李四晚", hour=10)], tasks=[], messages=[])
+    markdown = generate([m1, m2], REPORT_DATE, "研发一组").markdown
+
+    highlight_block = markdown.split("## ▎今日亮点")[1].split("## ▎张三")[0]
+    assert "· ✨ feat: 李四晚（李四，+10/-3 行）" in highlight_block
+    assert "feat: 张三早" not in highlight_block
+
+
+def test_highlights_priority_order_feat_before_fix():
+    """v1.8：亮点按优先级 feat > fix 排序，与提交时间无关。"""
+    member = make_member(commits=[_commit("fix: B", hour=10), _commit("feat: A", hour=8)])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    highlight_block = markdown.split("## ▎今日亮点")[1].split("## ▎张三")[0]
+    assert highlight_block.index("feat: A") < highlight_block.index("fix: B")
+
+
+def test_highlights_not_rendered_without_commits():
+    """v1.8：当天无提交时不渲染「今日亮点」（Markdown 与 HTML 一致）。"""
+    member = make_member(commits=[], tasks=[], messages=[])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+    html = generate([member], REPORT_DATE, "研发一组").html
+
+    assert "今日亮点" not in markdown
+    assert "今日亮点" not in html
+
+
+def test_html_highlights_reuses_card_style():
+    """v1.8：HTML 今日亮点复用成员卡片样式，位于概览之后、成员板块之前。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+
+    assert "▎今日亮点" in html
+    assert "feat: 登录页" in html
+    assert html.index('class="overview"') < html.index("▎今日亮点") < html.index("▎张三")
+    # 本周概况 + 今日亮点 + 成员卡片，共用 .card.member-card 样式
+    assert html.count('<section class="card member-card">') == 3
+
+
+# ---------- v1.8 修订：概览 active 按成员聚合（design.md §6.5） ----------
+
+def test_overview_active_when_any_member_configured():
+    """任一成员已接入 GitHub 即团队激活：B 未配置不掩盖 A 的提交
+    （概览代码提交行、工作分类行、落款数据来源均保留；B 的板块仍不渲染）。"""
+    a = make_member(commits=[_commit("feat: A", hour=8), _commit("fix: B", hour=9)])
+    b = make_member(name="李四", github_username="lisi", commits=[], tasks=[],
+                    messages=[], source_errors={"github": "GitHub 凭据未配置"})
+    markdown = generate([a, b], REPORT_DATE, "研发一组").markdown
+
+    assert "· 代码提交 2 次，共 +20 / -6 行" in markdown
+    assert "· 工作分类：✨ 新功能 1 ｜ 🐛 修复 1" in markdown
+    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in markdown
+    # 板块级规则不变：B 的「代码提交」板块仍不渲染
+    assert "▪ 代码提交" not in markdown.split("## ▎李四")[1]
+
+
+def test_overview_inactive_when_all_members_unconfigured():
+    """所有成员都未配置 github → 概览不出现代码提交行与工作分类行。"""
+    member = make_member(commits=[], tasks=[], messages=[],
+                         source_errors={"github": "GitHub 凭据未配置"})
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 代码提交" not in markdown
+    assert "工作分类" not in markdown
+    assert "数据来源：飞书任务、飞书考勤、飞书消息" in markdown
+
+
+def test_overview_all_inactive_without_members():
+    """members 为空时所有源视为未激活（v1.8 修订边界）。"""
+    markdown = generate([], REPORT_DATE, "研发一组").markdown
+
+    assert "· 代码提交" not in markdown
+    assert "工作分类" not in markdown

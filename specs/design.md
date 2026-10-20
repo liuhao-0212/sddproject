@@ -273,3 +273,23 @@ CollectResult[T]:
 - 三条命令均不触发采集/生成/推送/落库
 - 空结果文案：「暂无历史日报记录」/「未找到 YYYY-MM-DD 的日报记录」
 - 日期解析：仅接受 YYYY-MM-DD，非法输入提示格式并返回退出码 1
+
+**v1.8：日报内容智能化（提交归类 + 今日亮点）**
+- 归类规则（只解析提交消息第一行），解析正则：`^\s*(?P<type>[a-zA-Z]+)(\([^)]*\))?!?:`
+  | 前缀 | 类别 | 图标 |
+  |---|---|---|
+  | feat / feature | 新功能 | ✨ |
+  | fix / bugfix / hotfix | 修复 | 🐛 |
+  | perf | 性能 | ⚡ |
+  | refactor | 重构 | ♻️ |
+  | docs | 文档 | 📝 |
+  | test / tests | 测试 | ✅ |
+  | ci / build / chore | 工程 | 🔧 |
+  | style | 样式 | 🎨 |
+  | 无前缀 / 其他 | 其他 | 📦 |
+- 类别固定顺序：feat → fix → perf → refactor → docs → test → ci → style → 其他
+- 概览：有提交时追加「工作分类：✨ 新功能 N ｜ 🐛 修复 M …」（固定顺序，只列非零）
+- 提交板块：先一行汇总，再按类别分组（`- · ✨ 新功能（N）` + 子条目 `  - 标题（+X/-Y 行）`），组内按提交时间升序
+- 今日亮点：位于今日概览之后、成员段落之前；按优先级 feat > fix > perf > refactor > 其他，同类取最新，最多 3 条；当天无提交则不渲染该板块
+- HTML：新增 highlights_html 区块，复用 `.card.member-card` 样式，不新增配色
+- classify 逻辑放在 generator/classify.py（纯函数，便于单测）；generate(...) 签名不变
