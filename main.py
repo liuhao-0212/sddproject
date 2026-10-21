@@ -34,6 +34,7 @@ import collector.lark_msg as lark_msg
 import collector.lark_task as lark_task
 from collector.lark_attendance import AttendanceRecord
 from generator import DailyReport, MemberReport, generate
+from generator.formatter import UNASSIGNED_MEMBER_NAME
 from notifier import email as email_notifier
 from notifier import lark_bot as lark_bot_notifier
 from shared.config import env, load_config
@@ -404,10 +405,16 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
 
     GitHub 记录按 github 用户名匹配；飞书记录按 lark 用户名或成员姓名匹配；
     考勤记录按 employee_id 与 lark 用户名匹配。
-    未映射到任何成员的记录跳过并记录告警（不静默丢弃）。
+    v1.9：未匹配到任何成员的提交/任务/消息不再丢弃，统一归入
+    「其他贡献」伪成员（design.md §6.5）；考勤按人-日维度无法归属，
+    仍只记告警、不归集。
     """
     reports: list[MemberReport] = []
-    assigned_commits = assigned_tasks = assigned_messages = assigned_attendance = 0
+    # 已归属记录的对象 id 集合（v1.9）：按对象身份判定未归属，避免值相等误判
+    matched_commits: set[int] = set()
+    matched_tasks: set[int] = set()
+    matched_messages: set[int] = set()
+    assigned_attendance = 0
     attendance_by_employee: dict[str, AttendanceRecord] = {}
     for record in attendance:
         attendance_by_employee[record.employee_id] = record  # 同员工多条取最后一条
@@ -419,9 +426,9 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
         member_tasks = [t for t in tasks if _matches(t.assignee, lark_name, name)]
         member_messages = [m for m in messages if _matches(m.sender, lark_name, name)]
         member_attendance = attendance_by_employee.get(lark_name) if lark_name else None
-        assigned_commits += len(member_commits)
-        assigned_tasks += len(member_tasks)
-        assigned_messages += len(member_messages)
+        matched_commits.update(id(c) for c in member_commits)
+        matched_tasks.update(id(t) for t in member_tasks)
+        matched_messages.update(id(m) for m in member_messages)
         assigned_attendance += 1 if member_attendance is not None else 0
         reports.append(MemberReport(
             name=name,
@@ -432,15 +439,25 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
             source_errors={key: value for key, value in source_errors.items() if value},
             attendance=member_attendance,
         ))
-    if len(commits) > assigned_commits:
-        logger.warning("存在未映射到任何成员的提交记录，已跳过",
-                       extra={"count": len(commits) - assigned_commits})
-    if len(tasks) > assigned_tasks:
-        logger.warning("存在未映射到任何成员的任务记录，已跳过",
-                       extra={"count": len(tasks) - assigned_tasks})
-    if len(messages) > assigned_messages:
-        logger.warning("存在未映射到任何成员的消息记录，已跳过",
-                       extra={"count": len(messages) - assigned_messages})
+    # v1.9：未归属记录归入「其他贡献」伪成员（= 采集到的总数 - 已分配数）
+    unassigned_commits = [c for c in commits if id(c) not in matched_commits]
+    unassigned_tasks = [t for t in tasks if id(t) not in matched_tasks]
+    unassigned_messages = [m for m in messages if id(m) not in matched_messages]
+    if unassigned_commits or unassigned_tasks or unassigned_messages:
+        logger.info("未归属记录归入「其他贡献」",
+                    extra={"commits": len(unassigned_commits),
+                           "tasks": len(unassigned_tasks),
+                           "messages": len(unassigned_messages)})
+        reports.append(MemberReport(
+            name=UNASSIGNED_MEMBER_NAME,
+            github_username="",
+            commits=unassigned_commits,
+            tasks=unassigned_tasks,
+            messages=unassigned_messages,
+            source_errors={},
+            attendance=None,
+            is_unassigned=True,
+        ))
     if len(attendance) > assigned_attendance:
         logger.warning("存在未映射到任何成员的考勤记录，已跳过",
                        extra={"count": len(attendance) - assigned_attendance})
