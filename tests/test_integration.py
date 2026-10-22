@@ -630,3 +630,64 @@ def test_history_read_failure_does_not_block_report(monkeypatch, env, caplog):
     assert len(env["emails"]) == 1
     assert "· 暂无历史数据" in env["emails"][0][0].markdown
     assert "读取历史统计失败" in caplog.text
+
+
+# ---------- v1.9：未归属记录归集（design.md §6.5） ----------
+
+def test_unassigned_records_become_other_contributions(monkeypatch, env, caplog):
+    """未匹配到任何成员的提交/消息归入「其他贡献」成员段落，记录完整、不再丢弃。"""
+    stub_sources(monkeypatch,
+                 commits=[make_commit(),
+                          make_commit(author="newbie", message="hotfix typo in report")],
+                 messages=[make_message(),
+                           make_message(sender="newbie", content="文案已修正")])
+
+    with caplog.at_level(logging.INFO):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    report = env["emails"][0][0]
+    assert "## ▎其他贡献" in report.markdown
+    # 伪成员段落排在所有成员之后
+    assert report.markdown.index("## ▎李四") < report.markdown.index("## ▎其他贡献")
+    block = report.markdown.split("## ▎其他贡献")[1]
+    assert "hotfix typo in report" in block    # 未归属提交完整保留
+    assert "文案已修正" in block                # 未归属消息完整保留
+    assert "▪ 代码提交" in block
+    assert "▪ 协作沟通" in block
+    assert "▪ 任务进展" not in block            # 只渲染有数据的板块
+    assert "▪ 工时统计" not in block            # 考勤不参与归集
+    assert "今日无记录" not in block
+    # 日志带计数，不再使用「已跳过」措辞
+    record = next(r for r in caplog.records if r.message == "未归属记录归入「其他贡献」")
+    assert record.commits == 1 and record.tasks == 0 and record.messages == 1
+    assert "已跳过" not in caplog.text
+    # 今日概览计入未归属记录
+    assert "· 代码提交 2 次，共 +20 / -6 行" in report.markdown
+    assert "· 协作沟通 2 条" in report.markdown
+
+
+def test_no_unassigned_member_when_all_records_matched(monkeypatch, env, caplog):
+    """全部记录都匹配到成员时，不生成「其他贡献」段落、不打归集日志。"""
+    stub_sources(monkeypatch, commits=[make_commit()], tasks=[make_task()],
+                 messages=[make_message()])
+
+    with caplog.at_level(logging.INFO):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert "其他贡献" not in env["emails"][0][0].markdown
+    assert "未归属记录归入" not in caplog.text
+
+
+def test_unassigned_attendance_only_logs_warning(monkeypatch, env, caplog):
+    """只有未归属考勤：不生成「其他贡献」段落，仍打原有告警（人-日维度无法归属）。"""
+    stub_sources(monkeypatch, commits=[make_commit()],
+                 attendance=[make_attendance(employee_id="unknown@company.com")])
+
+    with caplog.at_level(logging.WARNING):
+        rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert "存在未映射到任何成员的考勤记录，已跳过" in caplog.text
+    assert "其他贡献" not in env["emails"][0][0].markdown

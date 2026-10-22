@@ -19,6 +19,9 @@
 - v1.8：提交按 Conventional Commits 归类（generator/classify.py）；概览追加「工作分类」
   行；成员提交板块按类别分组（组内时间升序）；新增「今日亮点」板块（今日概览之后、
   成员段落之前，最多 3 条、无提交不渲染）；generate(...) 签名不变
+- v1.9：未归属伪成员（MemberReport.is_unassigned=True，name=UNASSIGNED_MEMBER_NAME）
+  排在所有成员之后，只渲染有数据的板块（无「今日无记录」）；概览、工作分类、
+  今日亮点按普通成员计入；_configured_sources 忽略伪成员；generate(...) 签名不变
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -57,6 +60,18 @@ NO_RECORDS_TEXT = "今日无记录"
 
 # 报告名称：头部标题 / HTML 页面标题 / 邮件主题 / 飞书卡片标题共用（一处定义、多处使用）
 REPORT_NAME = "智能日报"
+
+# 未归属记录归集的伪成员名（v1.9，design.md §6.5）：编排层（main._aggregate）
+# 把未匹配到 config.members 的提交/任务/消息归入该成员，排在所有成员之后。
+UNASSIGNED_MEMBER_NAME = "其他贡献"
+
+# 板块数据字段映射（v1.9）：伪成员只渲染有数据的板块，据此判定是否为空
+SECTION_DATA_ATTRS = {
+    "github": "commits",
+    "lark_task": "tasks",
+    "lark_attendance": "attendance",
+    "lark_msg": "messages",
+}
 
 # 「未接入」（缺凭据/未授权/占位值）判定关键词（design.md §6.5）：与采集层的权威错误文案
 # 及编排层跳过采集时填充的原因对齐；命中时板块整体不渲染，原因只进日志。
@@ -101,6 +116,7 @@ class MemberReport:
     messages: list[MessageRecord] = field(default_factory=list)  # 相关消息记录
     source_errors: dict[str, str] = field(default_factory=dict)  # 数据源失败/未配置标注
     attendance: AttendanceRecord | None = None  # 考勤记录（v1.1 新增；None 视为当天无记录）
+    is_unassigned: bool = False      # 未归属记录归集的伪成员（v1.9；默认值保持向后兼容）
 
 
 @dataclass
@@ -167,10 +183,17 @@ def _build_markdown(members: list[MemberReport], report_date: date, team_name: s
     lines += _render_week(history)
     lines += _render_overview(members, history)
     lines += _render_highlights(members)
-    for member in members:
+    # v1.9：稳定排序，未归属伪成员排在所有真实成员之后（design.md §6.5）
+    for member in _ordered_members(members):
         lines.extend(_render_member(member))
     lines += _render_footer(members, generated_at)
     return "\n".join(lines) + "\n"
+
+
+def _ordered_members(members: list[MemberReport]) -> list[MemberReport]:
+    """成员渲染顺序（v1.9）：稳定排序，is_unassigned 的伪成员排最后；
+    其余成员保持原有相对顺序不变。"""
+    return sorted(members, key=lambda m: m.is_unassigned)
 
 
 def _render_header(team_name: str, report_date: date,
@@ -274,7 +297,11 @@ def _work_categories_line(members: list[MemberReport]) -> str:
 
 def _member_sections(member: MemberReport) -> list[tuple[str, str, list[str]]]:
     """成员各板块的渲染结果 (source, 标题, markdown 行)；空行的板块不渲染。
-    Markdown 正文与 HTML 板块共用同一组装结果（v1.5）。"""
+    Markdown 正文与 HTML 板块共用同一组装结果（v1.5）。
+
+    v1.9：未归属伪成员只渲染有数据的板块（SECTION_DATA_ATTRS 判定），
+    不输出「今日无记录」空板块（design.md §6.5）。
+    """
     renderers = {
         "github": _render_commits,
         "lark_task": _render_tasks,
@@ -283,10 +310,18 @@ def _member_sections(member: MemberReport) -> list[tuple[str, str, list[str]]]:
     }
     sections: list[tuple[str, str, list[str]]] = []
     for source, title, _icon in SECTIONS:
+        if member.is_unassigned and not _section_has_data(member, source):
+            continue  # v1.9：伪成员跳过无数据板块（考勤 None 视为无数据，不参与归集）
         section_lines = renderers[source](member)
         if section_lines:
             sections.append((source, title, section_lines))
     return sections
+
+
+def _section_has_data(member: MemberReport, source: str) -> bool:
+    """该源在 member 上是否有数据（v1.9，design.md §6.5）：
+    列表源看是否非空，考勤看记录是否存在（None 视为无记录）。"""
+    return bool(getattr(member, SECTION_DATA_ATTRS[source]))
 
 
 def _render_member(member: MemberReport) -> list[str]:
@@ -382,8 +417,10 @@ def _render_messages(member: MemberReport) -> list[str]:
     for message in sorted(member.messages, key=lambda m: m.timestamp):
         content = message.content.replace("\n", " ").strip()
         # 消息已按发送者归入成员（编排层按 sender 匹配），sender 原值多为 open_id 等
-        # 内部标识，展示统一用成员姓名（design.md §6.5：面向非技术读者，易读）
-        lines.append(f"- · [{message.chat_name}] {member.name}：{content}"
+        # 内部标识，展示统一用成员姓名（design.md §6.5：面向非技术读者，易读）；
+        # v1.9：未归属伪成员无法落到具体成员，发言人显示「未识别成员」
+        speaker = "未识别成员" if member.is_unassigned else member.name
+        lines.append(f"- · [{message.chat_name}] {speaker}：{content}"
                      f"（{_local(message.timestamp):%H:%M}）")
     lines.append("")
     return lines
@@ -456,9 +493,10 @@ def _highlights_html(members: list[MemberReport]) -> str:
 
 def _member_html_blocks(members: list[MemberReport]) -> list[dict]:
     """HTML 版成员板块（v1.5）：与 Markdown 正文同源组装；
-    每板块附带图标与状态（✅ 正常 / ⚠️ 不可用），正文转 HTML 后交模板渲染。"""
+    每板块附带图标与状态（✅ 正常 / ⚠️ 不可用），正文转 HTML 后交模板渲染。
+    v1.9：遍历前稳定排序，未归属伪成员排在所有成员之后（与 Markdown 一致）。"""
     blocks: list[dict] = []
-    for member in members:
+    for member in _ordered_members(members):
         sections = []
         for source, title, section_lines in _member_sections(member):
             sections.append({
@@ -494,9 +532,12 @@ def _configured_sources(members: list[MemberReport]) -> set[str]:
 
     仅影响概览与落款的团队级展示；成员板块仍按成员单独判定
     （未接入的成员板块不渲染，规则不变）。
+    v1.9：忽略未归属伪成员——其 source_errors 为空，不参与接入判定，
+    避免仅伪成员有数据时误激活数据源（design.md §6.5）。
     """
     return {source for source, _label in SOURCE_ORDER
-            for member in members if not _unconfigured(member, source)}
+            for member in members
+            if not member.is_unassigned and not _unconfigured(member, source)}
 
 
 def _friendly_reason(err: str) -> str:

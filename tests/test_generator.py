@@ -884,3 +884,82 @@ def test_overview_all_inactive_without_members():
 
     assert "· 代码提交" not in markdown
     assert "工作分类" not in markdown
+
+
+# ---------- v1.9：未归属记录归集（design.md §6.5） ----------
+
+def test_unassigned_member_rendered_last_with_data_sections_only():
+    """未归属伪成员排在所有成员之后（传入顺序无关）；只渲染有数据的板块，
+    不输出「今日无记录」空板块。"""
+    normal = make_member()
+    unassigned = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
+                             commits=[_commit("hotfix typo in report", hour=16)],
+                             tasks=[], messages=[], is_unassigned=True)
+    markdown = generate([unassigned, normal], REPORT_DATE, "研发一组").markdown
+
+    assert markdown.index("## ▎张三") < markdown.index("## ▎其他贡献")
+    block = markdown.split("## ▎其他贡献")[1]
+    assert "hotfix typo in report" in block
+    assert "▪ 代码提交" in block
+    assert "▪ 任务进展" not in block
+    assert "▪ 工时统计" not in block
+    assert "▪ 协作沟通" not in block
+    assert "今日无记录" not in block
+    # HTML 成员板块顺序与 Markdown 一致
+    html = generate([unassigned, normal], REPORT_DATE, "研发一组").html
+    assert html.index("▎张三") < html.index("▎其他贡献")
+
+
+def test_overview_categories_and_highlights_include_unassigned():
+    """v1.9：今日概览、工作分类、今日亮点把「其他贡献」当作普通成员计入。"""
+    normal = make_member()
+    unassigned = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
+                             commits=[_commit("fix: 修复文案", hour=16)],
+                             tasks=[], messages=[], is_unassigned=True)
+    markdown = generate([normal, unassigned], REPORT_DATE, "研发一组").markdown
+
+    assert "· 代码提交 2 次，共 +20 / -6 行" in markdown
+    assert "· 工作分类：✨ 新功能 1 ｜ 🐛 修复 1" in markdown
+    # 亮点：fix 类别最新为伪成员的提交，与真实成员按同一优先级规则参与
+    assert "· 🐛 fix: 修复文案（其他贡献，+10/-3 行）" in markdown
+
+
+def test_unassigned_member_ignored_for_team_source_availability():
+    """伪成员 source_errors 为空也不激活数据源：所有真实成员未配置 github 时，
+    概览不出现代码提交行与工作分类行（_configured_sources 忽略伪成员）。"""
+    real = make_member(commits=[], tasks=[], messages=[],
+                       source_errors={"github": "GitHub 凭据未配置"})
+    unassigned = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
+                             commits=[_commit("fix: X")], tasks=[], messages=[],
+                             is_unassigned=True)
+    markdown = generate([real, unassigned], REPORT_DATE, "研发一组").markdown
+
+    assert "- · 代码提交" not in markdown
+    assert "工作分类" not in markdown
+    assert "## ▎其他贡献" in markdown          # 伪成员段落照常渲染
+    assert "fix: X" in markdown
+
+
+def test_unassigned_member_messages_show_unrecognized_speaker():
+    """v1.9：伪成员的消息行发言人显示「未识别成员」——
+    不暴露 open_id 等内部标识，也不冒充具体成员姓名。"""
+    member = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
+                         commits=[], tasks=[],
+                         messages=[MessageRecord(
+                             sender="ou_newbie_openid", content="登录联调已通过",
+                             timestamp=datetime(2026, 9, 29, 17, 5, tzinfo=TZ),
+                             chat_name="研发一组")],
+                         is_unassigned=True)
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· [研发一组] 未识别成员：登录联调已通过（17:05）" in markdown
+    assert "其他贡献：" not in markdown       # 段落名不作为发言人出现
+    assert "ou_newbie_openid" not in markdown  # 内部标识不进入日报正文
+
+
+def test_normal_member_messages_still_show_member_name():
+    """普通成员的消息行仍以成员姓名发言（v1.9 不影响既有展示规则）。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+
+    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
+    assert "未识别成员" not in markdown

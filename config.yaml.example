@@ -22,6 +22,7 @@ members:
   - name: "王五"
     github: "wangwu"
     lark: "wangwu@company.com"
+# 未在 members 中列出的提交/任务/消息会归入日报的「其他贡献」段落，不会丢失
 
 # 采集层配置
 collector:

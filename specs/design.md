@@ -293,3 +293,12 @@ CollectResult[T]:
 - 今日亮点：位于今日概览之后、成员段落之前；按优先级 feat > fix > perf > refactor > 其他，同类取最新，最多 3 条；当天无提交则不渲染该板块
 - HTML：新增 highlights_html 区块，复用 `.card.member-card` 样式，不新增配色
 - classify 逻辑放在 generator/classify.py（纯函数，便于单测）；generate(...) 签名不变
+
+**v1.9：未归属记录归集（其他贡献）**
+- 触发：编排层聚合时存在未能匹配到 config.members 的提交 / 任务 / 消息
+- 结构：追加伪成员 MemberReport(name="其他贡献", is_unassigned=True)，排在所有成员之后
+- 渲染：该成员只渲染有数据的板块，不输出「今日无记录」；考勤不参与归集，仍记日志
+- 统计口径：概览、工作分类、今日亮点把「其他贡献」当作普通成员计入
+- 团队级数据源可用性（_configured_sources）忽略伪成员，避免空 source_errors 影响判定
+- 日志：未归属记录归入「其他贡献」，带 commits / tasks / messages 计数
+- 接口：MemberReport 新增 is_unassigned: bool = False（默认值保持向后兼容）

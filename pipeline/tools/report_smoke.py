@@ -21,36 +21,80 @@ from datetime import date, datetime
 
 
 def build_members(payload, app_dir):
-    """把 fixture 数据装配成生成层需要的对象（跨模块导入按部署目录解析）。"""
+    """把 fixture 数据装配成生成层需要的对象（跨模块导入按部署目录解析）。
+
+    v1.9：记录按身份路由到成员（对齐 main._aggregate 的匹配口径——提交按
+    github_username，任务/消息按成员姓名或 github_username，夹具无 lark 字段），
+    未匹配到任何成员的记录归入「其他贡献」伪成员（is_unassigned=True），
+    不再挂在条目所属成员名下；考勤不参与归集，保留在其所属成员条目。
+    """
     sys.path.insert(0, app_dir)
     from collector.github import CommitRecord
     from collector.lark_attendance import AttendanceRecord
     from collector.lark_msg import MessageRecord
     from collector.lark_task import TaskRecord
-    from generator.formatter import MemberReport
+    from generator.formatter import UNASSIGNED_MEMBER_NAME, MemberReport
 
     def parse(value):
         return datetime.fromisoformat(value) if value else None
 
+    def build_commit(c):
+        return CommitRecord(author=c["author"], message=c["message"],
+                            timestamp=parse(c["timestamp"]), repo=c["repo"],
+                            additions=c.get("additions", 0),
+                            deletions=c.get("deletions", 0),
+                            files_changed=c.get("files_changed", 0))
+
+    def build_task(t):
+        return TaskRecord(assignee=t["assignee"], title=t["title"],
+                          status_from=t["status_from"], status_to=t["status_to"],
+                          updated_at=parse(t["updated_at"]))
+
+    def build_message(m):
+        return MessageRecord(sender=m["sender"], content=m["content"],
+                             timestamp=parse(m["timestamp"]), chat_name=m["chat_name"])
+
+    raw_members = payload["members"]
+
+    def owner(value, github_only):
+        """记录归属的成员条目；未匹配返回 None。
+        github_only=True 时只按 github_username 匹配（提交），
+        否则按姓名或 github_username 匹配（任务/消息）。"""
+        for raw in raw_members:
+            if github_only:
+                if value and value == raw.get("github_username", ""):
+                    return raw
+            elif value == raw["name"] or value == raw.get("github_username", ""):
+                return raw
+        return None
+
+    # v1.9：按身份路由各条记录；未匹配任何成员的进入未归属集合
+    routed = {raw["name"]: {"commits": [], "tasks": [], "messages": []}
+              for raw in raw_members}
+    unassigned = {"commits": [], "tasks": [], "messages": []}
+    for raw in raw_members:
+        for c in raw.get("commits", []):
+            target = owner(c["author"], github_only=True)
+            bucket = routed[target["name"]]["commits"] if target else unassigned["commits"]
+            bucket.append(build_commit(c))
+        for t in raw.get("tasks", []):
+            target = owner(t["assignee"], github_only=False)
+            bucket = routed[target["name"]]["tasks"] if target else unassigned["tasks"]
+            bucket.append(build_task(t))
+        for m in raw.get("messages", []):
+            target = owner(m["sender"], github_only=False)
+            bucket = routed[target["name"]]["messages"] if target else unassigned["messages"]
+            bucket.append(build_message(m))
+
     members = []
-    for raw in payload["members"]:
+    for raw in raw_members:
         attendance = raw.get("attendance")
         members.append(MemberReport(
             name=raw["name"],
             github_username=raw.get("github_username", ""),
-            commits=[CommitRecord(author=c["author"], message=c["message"],
-                                  timestamp=parse(c["timestamp"]), repo=c["repo"],
-                                  additions=c.get("additions", 0),
-                                  deletions=c.get("deletions", 0),
-                                  files_changed=c.get("files_changed", 0))
-                     for c in raw.get("commits", [])],
-            tasks=[TaskRecord(assignee=t["assignee"], title=t["title"],
-                              status_from=t["status_from"], status_to=t["status_to"],
-                              updated_at=parse(t["updated_at"]))
-                   for t in raw.get("tasks", [])],
-            messages=[MessageRecord(sender=m["sender"], content=m["content"],
-                                    timestamp=parse(m["timestamp"]), chat_name=m["chat_name"])
-                      for m in raw.get("messages", [])],
+            commits=routed[raw["name"]]["commits"],
+            tasks=routed[raw["name"]]["tasks"],
+            messages=routed[raw["name"]]["messages"],
             source_errors=dict(raw.get("source_errors", {})),
             attendance=AttendanceRecord(employee_id=attendance["employee_id"],
                                         date=date.fromisoformat(attendance["date"]),
@@ -59,6 +103,17 @@ def build_members(payload, app_dir):
                                         work_hours=attendance.get("work_hours", 0.0),
                                         status=attendance.get("status", "未知"))
             if attendance else None,
+        ))
+    if unassigned["commits"] or unassigned["tasks"] or unassigned["messages"]:
+        members.append(MemberReport(
+            name=UNASSIGNED_MEMBER_NAME,
+            github_username="",
+            commits=unassigned["commits"],
+            tasks=unassigned["tasks"],
+            messages=unassigned["messages"],
+            source_errors={},
+            attendance=None,
+            is_unassigned=True,
         ))
     return members
 
