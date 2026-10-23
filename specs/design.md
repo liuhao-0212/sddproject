@@ -333,3 +333,10 @@ CollectResult[T]:
 - 员工 ID 解析顺序：members[].attendance → contact.user.employee_id → contact.user.user_id
 - 同一天多条 record 合并：最早 check_in + 最晚 check_out；状态取第一条非「正常」
 - 无记录返回空列表且 success=True（不是错误）
+
+
+### 6.10 趋势校准与版本发布分类（v1.14）
+- 趋势校准：_load_history 读取 daily_stats 后，用本次采集的 today_stats["commits"] 覆盖趋势最后一天（今日统计尚未落库）
+- 分类新增：release 类别（🚀 版本发布），位于 fix 之后、perf 之前，优先级 2
+- 前缀识别：vX.Y[:] / release: / publish: / version:（大小写不敏感）
+- 其余分类与固定顺序保持不变

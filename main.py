@@ -580,8 +580,12 @@ def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict |
         yesterday = {"commits": yesterday_rows["commits"],
                      "additions": yesterday_rows["additions"],
                      "deletions": yesterday_rows["deletions"]}
+    # v1.14：今天的统计尚未落库，用本次采集结果覆盖趋势最后一天
+    trend = _build_trend(trend_rows, today)
+    if trend:
+        trend[-1]["commits"] = today_stats["commits"]
     return {"week": week, "last_week": last_week, "yesterday": yesterday,
-            "trend": _build_trend(trend_rows, today)}
+            "trend": trend}
 
 
 def _build_trend(rows: list[dict], today: date) -> list[dict]:
