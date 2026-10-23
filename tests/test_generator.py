@@ -751,6 +751,14 @@ def test_overview_work_categories_fixed_order():
     assert "· 工作分类：✨ 新功能 1 ｜ 🐛 修复 1" in markdown
 
 
+def test_overview_release_category_for_version_prefixes():
+    """v1.14：vX.Y: 提交归入「版本发布」，出现在工作分类行。"""
+    member = make_member(commits=[_commit("v1.14: 趋势校准", hour=9)])
+    markdown = generate([member], REPORT_DATE, "研发一组").markdown
+
+    assert "· 工作分类：🚀 版本发布 1" in markdown
+
+
 def test_overview_no_work_categories_without_commits():
     member = make_member(commits=[])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown

@@ -822,7 +822,7 @@ def test_repo_collection_failure_hides_section(monkeypatch, env, caplog):
 
 
 def test_trend_built_from_stats_rows_with_zero_fill(monkeypatch, env):
-    """v1.12：近 7 天趋势取 daily_stats，缺失日期按 0 补齐（今天生成时尚未落库）。"""
+    """v1.12/v1.14：近 7 天趋势取 daily_stats，缺失按 0 补齐；最后一天用本次采集的当日提交数。"""
     env["stats_rows"] = [
         {"date": "2026-09-23", "team_name": "研发一组", "commits_count": 1,
          "additions": 10, "deletions": 0, "messages_count": 0},
@@ -839,6 +839,6 @@ def test_trend_built_from_stats_rows_with_zero_fill(monkeypatch, env):
 
     assert rc == 0
     report = env["emails"][0][0]
-    # 09-23..09-29（含今天 0）→ 1,0,3,2,0,4,0；峰值 4
-    assert "- · 近 7 天：▂▁▆▄▁█▁（峰值 4 次）" in report.markdown
-    assert "▂▁▆▄▁█▁" in report.html
+    # 09-23..09-29（含今天 1 次提交）→ 1,0,3,2,0,4,1；峰值 4
+    assert "- · 近 7 天：▂▁▆▄▁█▂（峰值 4 次）" in report.markdown
+    assert "▂▁▆▄▁█▂" in report.html

@@ -21,17 +21,18 @@ class CommitCategory:
 
 
 # 类别定义（design.md §6.5 v1.8 映射表）；CATEGORY_ORDER 为固定展示顺序，
-# priority 与之单调一致（feat > fix > perf > refactor > docs > test > ci > style > other）。
+# priority 与之单调一致（feat > fix > release > perf > refactor > docs > test > ci > style > other）。
 CATEGORIES: tuple[CommitCategory, ...] = (
     CommitCategory("feat", "新功能", "✨", 0),
     CommitCategory("fix", "修复", "🐛", 1),
-    CommitCategory("perf", "性能", "⚡", 2),
-    CommitCategory("refactor", "重构", "♻️", 3),
-    CommitCategory("docs", "文档", "📝", 4),
-    CommitCategory("test", "测试", "✅", 5),
-    CommitCategory("ci", "工程", "🔧", 6),
-    CommitCategory("style", "样式", "🎨", 7),
-    CommitCategory("other", "其他", "📦", 8),
+    CommitCategory("release", "版本发布", "🚀", 2),
+    CommitCategory("perf", "性能", "⚡", 3),
+    CommitCategory("refactor", "重构", "♻️", 4),
+    CommitCategory("docs", "文档", "📝", 5),
+    CommitCategory("test", "测试", "✅", 6),
+    CommitCategory("ci", "工程", "🔧", 7),
+    CommitCategory("style", "样式", "🎨", 8),
+    CommitCategory("other", "其他", "📦", 9),
 )
 CATEGORY_ORDER: tuple[str, ...] = tuple(category.key for category in CATEGORIES)
 CATEGORY_BY_KEY: dict[str, CommitCategory] = {category.key: category
@@ -54,11 +55,17 @@ _TYPE_ALIASES = {
     "build": "ci",
     "chore": "ci",
     "style": "style",
+    "release": "release",
+    "publish": "release",
+    "version": "release",
 }
 
 # 解析正则（design.md §6.5 v1.8）：只解析消息第一行；前缀为行首单词（字母），
 # 可带 scope（`(…)`）与重大变更标记（`!`），后跟冒号，如 `feat(report)!: …`
 _TYPE_RE = re.compile(r"^\s*(?P<type>[a-zA-Z]+)(\([^)]*\))?!?:")
+
+# 版本号前缀（v1.14: / 1.14: / v1.14 ）→ 版本发布（v1.14）
+_VERSION_RE = re.compile(r"^\s*v?\d+(?:\.\d+)+(?:!?:|\s)", re.IGNORECASE)
 
 
 def classify_commit(title: str) -> CommitCategory:
@@ -68,6 +75,8 @@ def classify_commit(title: str) -> CommitCategory:
     前缀不区分大小写（Conventional Commits 约定小写，这里兼容 `Fix:` 等写法）。
     """
     first_line = title.splitlines()[0].strip() if title else ""
+    if _VERSION_RE.match(first_line):
+        return CATEGORY_BY_KEY["release"]
     match = _TYPE_RE.match(first_line)
     if match is None:
         return CATEGORY_BY_KEY["other"]

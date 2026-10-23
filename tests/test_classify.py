@@ -40,6 +40,16 @@ def test_scope_and_breaking_marker_supported():
     assert classify_commit("feat(): 空 scope").key == "feat"
 
 
+def test_version_prefixes_map_to_release():
+    """v1.14：版本号与发布类前缀归「版本发布」。"""
+    for title in ("v1.14: 修复考勤", "1.14: 发版", "V1.2: 发布",
+                  "release: v1.14", "publish: v1.14", "version: v1.14"):
+        category = classify_commit(title)
+        assert category.key == "release"
+        assert category.label == "版本发布"
+        assert category.icon == "🚀"
+
+
 def test_no_prefix_falls_back_to_other():
     category = classify_commit("更新依赖版本")
     assert category.key == "other"
