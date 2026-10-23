@@ -311,6 +311,19 @@
 - [ ] 飞书消息采集默认关闭
 - [ ] 全部测试通过
 
+## Task 23: 飞书考勤接入修复（v1.13）
+描述: 修正考勤接口路径与请求契约，补 employee_id 解析，让工时统计恢复可用
+输入: design.md §6.9、proposal.md §3.16
+输出: collector/lark_attendance.py、tests/test_attendance.py、config.yaml.example
+依赖: Task 22
+
+验收标准:
+- [ ] 使用 user_stats_datas/query + employee_type 查询参数
+- [ ] 请求体字段与官方契约一致
+- [ ] employee_id 来源：config.attendance 优先，其次通讯录解析
+- [ ] 解析失败记录真实响应；404 文案不再误导
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

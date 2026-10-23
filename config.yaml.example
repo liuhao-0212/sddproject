@@ -16,12 +16,15 @@ members:
   - name: "张三"
     github: "zhangsan"
     lark: "zhangsan@company.com"
+    # attendance: "员工ID"（可选；不填会用 lark open_id 自动解析）
   - name: "李四"
     github: "lisi-dev"
     lark: "lisi@company.com"
+    # attendance: "员工ID"（可选；不填会用 lark open_id 自动解析）
   - name: "王五"
     github: "wangwu"
     lark: "wangwu@company.com"
+    # attendance: "员工ID"（可选；不填会用 lark open_id 自动解析）
 # 未在 members 中列出的提交/任务/消息会归入日报的「其他贡献」段落，不会丢失
 
 # 采集层配置

@@ -262,6 +262,19 @@ def test_attendance_rendered_in_report(monkeypatch, env):
     assert report.markdown.count("· 今日无记录") == 4
 
 
+def test_attendance_matched_via_resolved_employee_id(monkeypatch, env):
+    """v1.13：通讯录回退 user_id 时，编排层仍能把考勤归属到成员。"""
+    stub_sources(monkeypatch, commits=[make_commit()],
+                 attendance=[make_attendance(employee_id="c9916d91")])
+    monkeypatch.setattr(main.lark_attendance, "get_last_employee_ids",
+                        lambda: {"zhangsan@company.com": "c9916d91"})
+
+    rc = main.run(dry_run=False)
+
+    assert rc == 0
+    assert "工时 9 小时（正常）" in env["emails"][0][0].markdown
+
+
 def test_attendance_failure_shows_friendly_and_logs(monkeypatch, env, caplog):
     """v1.4 修订：考勤源不可用 → 工时统计板块保留 + 可读说明；失败经日志显式记录。"""
     stub_sources(monkeypatch, commits=[make_commit()], attendance_err="考勤接口超时")
