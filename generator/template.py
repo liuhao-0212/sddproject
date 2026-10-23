@@ -10,6 +10,8 @@
   不引入新配色）；正文由 formatter 转换后以 safe 插入
 - v1.8：概览卡片之后、成员板块之前新增「今日亮点」板块（有内容时渲染，
   highlights_html 由 formatter 转换后以 safe 插入），复用成员卡片样式、不新增配色
+- v1.12：今日亮点之后、成员板块之前新增「仓库动态」板块（repo_html 由 formatter
+  转换后以 safe 插入），同样复用成员卡片样式；未提供仓库动态时为空串、不渲染
 """
 
 from __future__ import annotations
@@ -91,6 +93,11 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
 {% if highlights_html %}
 <section class="card member-card">
   {{ highlights_html | safe }}
+</section>
+{% endif %}
+{% if repo_html %}
+<section class="card member-card">
+  {{ repo_html | safe }}
 </section>
 {% endif %}
 {% for member in member_sections %}

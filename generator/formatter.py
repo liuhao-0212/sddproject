@@ -22,6 +22,10 @@
 - v1.9：未归属伪成员（MemberReport.is_unassigned=True，name=UNASSIGNED_MEMBER_NAME）
   排在所有成员之后，只渲染有数据的板块（无「今日无记录」）；概览、工作分类、
   今日亮点按普通成员计入；_configured_sources 忽略伪成员；generate(...) 签名不变
+- v1.12：移除「协作沟通」板块（成员段 / 概览 / 落款同步删除 lark_msg，消息字段保留）；
+  新增「仓库动态」板块（今日亮点之后、成员段落之前，五类事件固定顺序、每类最多 5 条）；
+  本周概况追加近 7 天提交趋势（▁▂▃▄▅▆▇█ + 峰值），generate(...) 新增 repo_events
+  关键字参数（默认 None 时不渲染该板块，保持向后兼容）
 - 日报仅含统计信息，不含代码差异内容（design.md §6.2）
 """
 
@@ -33,18 +37,19 @@ from datetime import date, datetime
 from html import escape
 
 from collector.github import CommitRecord
+from collector.github_activity import RepoEvent
 from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
 from generator.classify import (CATEGORY_BY_KEY, CATEGORY_ORDER, classify_commits)
 from generator.template import render_html
 
-# 数据源展示顺序：概览/落款与正文板块顺序一致（代码提交 → 任务进展 → 工时统计 → 协作沟通）
+# 数据源展示顺序：概览/落款与正文板块顺序一致（代码提交 → 任务进展 → 工时统计）；
+# v1.12：协作沟通（lark_msg）不再出现在日报中（design.md §6.8）
 SOURCE_ORDER = [
     ("github", "GitHub"),
     ("lark_task", "飞书任务"),
     ("lark_attendance", "飞书考勤"),
-    ("lark_msg", "飞书消息"),
 ]
 # 板块顺序与元信息：source key → (板块标题, HTML 板块图标)（design.md §6.5 v1.5）；
 # Markdown 标题仍为「▪ 标题」不变，图标仅用于 HTML。
@@ -52,7 +57,6 @@ SECTIONS = (
     ("github", "代码提交", "💻"),
     ("lark_task", "任务进展", "📋"),
     ("lark_attendance", "工时统计", "⏱"),
-    ("lark_msg", "协作沟通", "💬"),
 )
 SECTION_ICONS = {source: icon for source, _title, icon in SECTIONS}
 
@@ -70,8 +74,24 @@ SECTION_DATA_ATTRS = {
     "github": "commits",
     "lark_task": "tasks",
     "lark_attendance": "attendance",
-    "lark_msg": "messages",
 }
+
+# 仓库动态展示顺序（v1.12，design.md §6.8）：固定五类；pr_closed 仅采集不展示
+REPO_EVENT_GROUPS = (
+    ("pr_merged", "合并 PR"),
+    ("pr_opened", "新建 PR"),
+    ("issue_closed", "关闭 Issue"),
+    ("issue_opened", "新建 Issue"),
+    ("release", "发布版本"),
+)
+REPO_EVENT_LIMIT = 5  # 每类最多展示条数，超出显示「另有 N 条」
+
+# 近 7 天趋势字符（v1.12）：按最大值归一化，全 0 时全 ▁
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+# 仓库动态板块空态文案
+NO_REPO_EVENTS_TEXT = "今日无仓库动态"
+NO_TREND_TEXT = "暂无趋势数据"
 
 # 「未接入」（缺凭据/未授权/占位值）判定关键词（design.md §6.5）：与采集层的权威错误文案
 # 及编排层跳过采集时填充的原因对齐；命中时板块整体不渲染，原因只进日志。
@@ -133,17 +153,21 @@ class DailyReport:
 
 def generate(members: list[MemberReport], date: date, team_name: str,
              window: tuple[datetime, datetime] | None = None,
-             history: dict | None = None) -> DailyReport:
+             history: dict | None = None,
+             repo_events: list[RepoEvent] | None = None) -> DailyReport:
     """生成日报（design.md §4.2）。window 为采集窗口 (since, until)，用于头部数据范围。
 
     history 为历史统计（v1.6，由编排层从 daily_stats 读取组装），用于
-    「本周概况」与「较昨日」对比；None（无历史数据）时显示「暂无历史数据」。
+    「本周概况」「较昨日」与近 7 天趋势（v1.12）；None 时显示「暂无历史数据」。
+    repo_events 为仓库动态事件（v1.12）：None 表示未提供（板块不渲染，向后兼容），
+    空列表表示已采集但当天无动态（显示「今日无仓库动态」）。
     Markdown 供飞书卡片使用（结构不变）；HTML 由模板按结构化数据渲染（v1.5）。
     """
     generated_at = datetime.now()
-    markdown = _build_markdown(members, date, team_name, window, generated_at, history)
+    markdown = _build_markdown(members, date, team_name, window, generated_at, history,
+                               repo_events)
     html = render_html(_html_structure(members, date, team_name, window, generated_at,
-                                       history))
+                                       history, repo_events))
     return DailyReport(
         date=date,
         team_name=team_name,
@@ -156,8 +180,9 @@ def generate(members: list[MemberReport], date: date, team_name: str,
 
 def _html_structure(members: list[MemberReport], report_date: date, team_name: str,
                     window: tuple[datetime, datetime] | None,
-                    generated_at: datetime, history: dict | None = None) -> dict:
-    """组装 HTML 模板所需的结构化数据（design.md §6.5 v1.5/v1.6）；
+                    generated_at: datetime, history: dict | None = None,
+                    repo_events: list[RepoEvent] | None = None) -> dict:
+    """组装 HTML 模板所需的结构化数据（design.md §6.5 v1.5/v1.6、§6.8 v1.12）；
     板块正文与落款在此先行转 HTML，模板不再解析 Markdown。"""
     stats = _overview_stats(members)
     return {
@@ -169,6 +194,7 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "week_html": _week_html(history),
         "overview_cards": _overview_cards(stats, history),
         "highlights_html": _highlights_html(members),
+        "repo_html": _repo_events_html(repo_events),
         "member_sections": _member_html_blocks(members),
         "footer_html": _footer_html(members, generated_at),
     }
@@ -176,13 +202,17 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
 
 def _build_markdown(members: list[MemberReport], report_date: date, team_name: str,
                     window: tuple[datetime, datetime] | None,
-                    generated_at: datetime, history: dict | None = None) -> str:
+                    generated_at: datetime, history: dict | None = None,
+                    repo_events: list[RepoEvent] | None = None) -> str:
     """v1.3 结构：头部 → 本周概况（v1.6）→ 今日概览 → 今日亮点（v1.8）
-    → 成员段落 → 落款。"""
+    → 仓库动态（v1.12）→ 成员段落 → 落款。"""
     lines = _render_header(team_name, report_date, window)
     lines += _render_week(history)
     lines += _render_overview(members, history)
     lines += _render_highlights(members)
+    if repo_events is not None:  # v1.12：None = 未提供，板块不渲染（向后兼容）
+        lines += ["## ▎仓库动态", ""]
+        lines += _render_repo_events(repo_events)
     # v1.9：稳定排序，未归属伪成员排在所有真实成员之后（design.md §6.5）
     for member in _ordered_members(members):
         lines.extend(_render_member(member))
@@ -224,7 +254,6 @@ def _overview_stats(members: list[MemberReport]) -> dict:
         "additions": sum(c.additions for m in members for c in m.commits),
         "deletions": sum(c.deletions for m in members for c in m.commits),
         "tasks": sum(len(m.tasks) for m in members),
-        "messages": sum(len(m.messages) for m in members),
         "attended": len(attended),
         "hours": sum(a.work_hours for a in attended),
     }
@@ -233,17 +262,44 @@ def _overview_stats(members: list[MemberReport]) -> dict:
 def _render_week(history: dict | None) -> list[str]:
     """本周概况（v1.6，design.md §6.5）：位于今日概览之前，展示本周（周一~当日）
     提交/变更/活跃天数与较上周对比；history 为 None（无历史数据）时显示
-    「暂无历史数据」，不报错。"""
+    「暂无历史数据」，不报错。
+    v1.12：追加近 7 天提交趋势（▁▂▃▄▅▆▇█ + 峰值）；无 trend 显示「暂无趋势数据」。"""
     lines = ["## ▎本周概况", ""]
     if not history:
-        lines += ["- · 暂无历史数据", ""]
+        lines += ["- · 暂无历史数据", _trend_line(history), ""]
         return lines
     week = history["week"]
     lines.append(f"- · 提交 {week['commits']} 次 ｜ 变更 +{week['additions']} / -{week['deletions']} 行")
     diff = week["commits"] - history["last_week"]["commits"]
     lines.append(f"- · 活跃 {week['active_days']} 天 ｜ 📈 较上周：提交 {_signed(diff)} 次")
+    lines.append(_trend_line(history))
     lines.append("")
     return lines
+
+
+def _trend_line(history: dict | None) -> str:
+    """近 7 天提交趋势行（v1.12，design.md §6.8）：无数据时显示占位文案。"""
+    trend = (history or {}).get("trend") or []
+    if not trend:
+        return f"- · 近 7 天：{NO_TREND_TEXT}"
+    values = [int(item.get("commits", 0)) for item in trend]
+    peak = max(values) if values else 0
+    return f"- · 近 7 天：{_sparkline(values)}（峰值 {peak} 次）"
+
+
+def _sparkline(values: list[int]) -> str:
+    """把提交数序列转成 ▁▂▃▄▅▆▇█ 迷你柱状图（v1.12）：
+    按最大值归一化到 8 档；全 0（或空）时全部为 ▁。"""
+    if not values:
+        return ""
+    peak = max(values)
+    if peak <= 0:
+        return SPARK_CHARS[0] * len(values)
+    return "".join(
+        SPARK_CHARS[min(len(SPARK_CHARS) - 1,
+                        max(0, int(value / peak * (len(SPARK_CHARS) - 1))))]
+        for value in values
+    )
 
 
 def _signed(value: int) -> str:
@@ -272,8 +328,6 @@ def _render_overview(members: list[MemberReport], history: dict | None = None) -
         lines.append(f"- · 任务进展 {stats['tasks']} 项")
     if active["lark_attendance"]:
         lines.append(f"- · 工时统计 {stats['attended']} 人，共 {stats['hours']:g} 小时")
-    if active["lark_msg"]:
-        lines.append(f"- · 协作沟通 {stats['messages']} 条")
     lines.append("")
     return lines
 
@@ -306,7 +360,6 @@ def _member_sections(member: MemberReport) -> list[tuple[str, str, list[str]]]:
         "github": _render_commits,
         "lark_task": _render_tasks,
         "lark_attendance": _render_attendance,
-        "lark_msg": _render_messages,
     }
     sections: list[tuple[str, str, list[str]]] = []
     for source, title, _icon in SECTIONS:
@@ -326,9 +379,14 @@ def _section_has_data(member: MemberReport, source: str) -> bool:
 
 def _render_member(member: MemberReport) -> list[str]:
     """成员段落（v1.3）：▎成员 → ▪板块 → ·条目；未接入的板块不渲染，
-    不可用的板块保留并显示可读说明（v1.4 修订）。"""
+    不可用的板块保留并显示可读说明（v1.4 修订）。
+    v1.12：未归属伪成员若已无可渲染板块（如仅有消息，而消息板块已移除），
+    整个段落不输出，避免空标题。"""
+    sections = _member_sections(member)
+    if member.is_unassigned and not sections:
+        return []
     lines = [f"## ▎{member.name}", ""]
-    for _source, title, section_lines in _member_sections(member):
+    for _source, title, section_lines in sections:
         lines += [f"### ▪ {title}", "", *section_lines]
     lines += [""]
     return lines
@@ -364,6 +422,36 @@ def _render_highlights(members: list[MemberReport]) -> list[str]:
                      f"+{commit.additions}/-{commit.deletions} 行）")
     lines.append("")
     return lines
+
+
+def _render_repo_events(events: list[RepoEvent]) -> list[str]:
+    """仓库动态板块正文（v1.12，design.md §6.8）：团队级板块，位于今日亮点之后、
+    成员段落之前。五类事件按固定顺序分组展示，每类最多 5 条，超出显示「另有 N 条」；
+    无事件时显示「今日无仓库动态」。"""
+    if not events:
+        return [f"- · {NO_REPO_EVENTS_TEXT}", ""]
+    lines: list[str] = []
+    for kind, label in REPO_EVENT_GROUPS:
+        group = [event for event in events if event.kind == kind]
+        if not group:
+            continue
+        lines.append(f"- · {label}（{len(group)}）")
+        for event in group[:REPO_EVENT_LIMIT]:
+            lines.append(_repo_event_item(event))
+        if len(group) > REPO_EVENT_LIMIT:
+            lines.append(f"- · 另有 {len(group) - REPO_EVENT_LIMIT} 条")
+    if not lines:  # 仅有不展示的类型（如 pr_closed）时按无动态处理，避免空板块
+        return [f"- · {NO_REPO_EVENTS_TEXT}", ""]
+    lines.append("")
+    return lines
+
+
+def _repo_event_item(event: RepoEvent) -> str:
+    """单条仓库动态：PR/Issue 带编号，Release 只显示名称；时间统一为 MM-DD。"""
+    date_text = f"{_local(event.timestamp):%m-%d}"
+    if event.kind == "release":
+        return f"  - {event.title}（{date_text}）"
+    return f"  - #{event.number} {event.title}（{date_text}）"
 
 
 def _render_commits(member: MemberReport) -> list[str]:
@@ -402,26 +490,6 @@ def _render_tasks(member: MemberReport) -> list[str]:
     for task in sorted(member.tasks, key=lambda t: t.updated_at):
         lines.append(f"- · {task.title}：{task.status_from} → {task.status_to}"
                      f"（{_local(task.updated_at):%H:%M}）")
-    lines.append("")
-    return lines
-
-
-def _render_messages(member: MemberReport) -> list[str]:
-    if _unconfigured(member, "lark_msg"):
-        return []  # 未接入：板块不渲染（design.md §6.5）
-    if "lark_msg" in member.source_errors:
-        return [f"- · {_friendly_reason(member.source_errors['lark_msg'])}", ""]  # v1.4：保留板块 + 可读说明
-    if not member.messages:
-        return [f"- · {NO_RECORDS_TEXT}", ""]
-    lines = []
-    for message in sorted(member.messages, key=lambda m: m.timestamp):
-        content = message.content.replace("\n", " ").strip()
-        # 消息已按发送者归入成员（编排层按 sender 匹配），sender 原值多为 open_id 等
-        # 内部标识，展示统一用成员姓名（design.md §6.5：面向非技术读者，易读）；
-        # v1.9：未归属伪成员无法落到具体成员，发言人显示「未识别成员」
-        speaker = "未识别成员" if member.is_unassigned else member.name
-        lines.append(f"- · [{message.chat_name}] {speaker}：{content}"
-                     f"（{_local(message.timestamp):%H:%M}）")
     lines.append("")
     return lines
 
@@ -472,8 +540,6 @@ def _overview_cards(stats: dict, history: dict | None = None) -> list[dict]:
         if history and history.get("yesterday"):
             diff = stats["commits"] - history["yesterday"]["commits"]
             cards.append({"label": "较昨日提交", "value": f"{_signed(diff)} 次"})
-    if stats["active"]["lark_msg"]:
-        cards.append({"label": "讨论条数", "value": str(stats["messages"])})
     return cards
 
 
@@ -491,6 +557,16 @@ def _highlights_html(members: list[MemberReport]) -> str:
     return markdown_to_html("\n".join(lines))
 
 
+def _repo_events_html(repo_events: list[RepoEvent] | None) -> str:
+    """HTML 版仓库动态（v1.12）：与 Markdown 板块同源（_render_repo_events），
+    复用成员卡片样式渲染；repo_events 为 None（未提供）时返回空串（板块不渲染）。"""
+    if repo_events is None:
+        return ""
+    lines = ["## ▎仓库动态", ""]
+    lines += [line for line in _render_repo_events(repo_events) if line.strip()]
+    return markdown_to_html("\n".join(lines))
+
+
 def _member_html_blocks(members: list[MemberReport]) -> list[dict]:
     """HTML 版成员板块（v1.5）：与 Markdown 正文同源组装；
     每板块附带图标与状态（✅ 正常 / ⚠️ 不可用），正文转 HTML 后交模板渲染。
@@ -505,6 +581,8 @@ def _member_html_blocks(members: list[MemberReport]) -> list[dict]:
                 "status": "warn" if source in member.source_errors else "ok",
                 "body_html": markdown_to_html("\n".join(section_lines)),
             })
+        if member.is_unassigned and not sections:
+            continue  # v1.12：无渲染板块的伪成员不输出空卡片
         blocks.append({"name": member.name, "sections": sections})
     return blocks
 

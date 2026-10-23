@@ -7,6 +7,7 @@ import pytest
 
 import generator.formatter as formatter
 from collector.github import CommitRecord
+from collector.github_activity import RepoEvent
 from collector.lark_attendance import AttendanceRecord
 from collector.lark_msg import MessageRecord
 from collector.lark_task import TaskRecord
@@ -79,7 +80,7 @@ def test_markdown_contains_member_and_section_titles():
     assert "### ▪ 代码提交" in markdown
     assert "### ▪ 任务进展" in markdown
     assert "### ▪ 工时统计" in markdown
-    assert "### ▪ 协作沟通" in markdown
+    assert "### ▪ 协作沟通" not in markdown  # v1.12：协作沟通已移除
     assert "GitHub 用户名" not in markdown  # v1.3：不再展示内部标识行
 
 
@@ -94,22 +95,6 @@ def test_markdown_renders_commits_with_stats():
 def test_markdown_renders_tasks():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
     assert "· 实现登录页：未开始 → 进行中（10:00）" in markdown
-
-
-def test_markdown_renders_messages():
-    markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
-    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
-
-
-def test_message_sender_displayed_as_member_name():
-    """sender 原值多为 open_id 等内部标识，展示统一用成员姓名（design.md §6.5 易读）。"""
-    member = make_member(messages=[MessageRecord(
-        sender="ou_zhangsan_openid", content="评审文档已上传",
-        timestamp=datetime(2026, 9, 29, 10, 5, tzinfo=TZ), chat_name="团队群")])
-    markdown = generate([member], REPORT_DATE, "研发一组").markdown
-
-    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
-    assert "ou_zhangsan_openid" not in markdown  # 内部标识不进入日报正文
 
 
 def test_commit_renders_title_line_only():
@@ -130,7 +115,7 @@ def test_empty_member_shows_no_records_today():
     member = make_member(commits=[], tasks=[], messages=[])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.count("· 今日无记录") == 4  # 四个板块各一条
+    assert markdown.count("· 今日无记录") == 3  # 三个板块各一条（v1.12 移除协作沟通）
 
 
 def test_source_failure_shows_friendly_line():
@@ -147,23 +132,24 @@ def test_source_failure_shows_friendly_line():
 
 def test_source_failure_without_reason_shows_default_line():
     """v1.4 修订：原因为空时显示兜底文案「飞书数据暂不可用」。"""
-    member = make_member(source_errors={"lark_msg": ""})
+    member = make_member(source_errors={"lark_task": ""})
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "▪ 协作沟通" in markdown
+    assert "▪ 任务进展" in markdown
     assert "· 飞书数据暂不可用" in markdown
 
 
 def test_all_sources_failed_show_friendly_lines():
-    """v1.4 修订：三个源全部不可用 → 三个板块保留、各显示可读说明；可用源板块保留。"""
-    member = make_member(source_errors={"github": "a", "lark_task": "b", "lark_msg": "c"})
+    """v1.4 修订：三个源全部不可用 → 三个板块保留、各显示可读说明。"""
+    member = make_member(source_errors={"github": "a", "lark_task": "b",
+                                        "lark_attendance": "c"})
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
     assert markdown.count("· 飞书数据暂不可用") == 3
     assert "▪ 代码提交" in markdown
     assert "▪ 任务进展" in markdown
-    assert "▪ 协作沟通" in markdown
-    assert "· 今日无记录" in markdown  # 考勤源可用但无记录：板块保留
+    assert "▪ 工时统计" in markdown
+    assert "▪ 协作沟通" not in markdown  # v1.12：协作沟通已移除
 
 
 def test_multiple_members_each_have_sections():
@@ -209,11 +195,11 @@ def test_html_renders_friendly_line():
 
 # ---------- v1.1：工时统计板块 ----------
 
-def test_attendance_section_between_tasks_and_messages():
+def test_attendance_section_after_tasks():
+    """v1.12：协作沟通移除后，工时统计紧跟任务进展（仍是成员内最后一段）。"""
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.index("### ▪ 任务进展") < markdown.index("### ▪ 工时统计") \
-        < markdown.index("### ▪ 协作沟通")
+    assert markdown.index("### ▪ 任务进展") < markdown.index("### ▪ 工时统计")
 
 
 def test_attendance_renders_work_hours_and_status():
@@ -267,7 +253,7 @@ def test_attendance_no_record_counts_as_no_records():
     member = make_member(commits=[], tasks=[], messages=[])
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert markdown.count("· 今日无记录") == 4  # 四个板块各一条
+    assert markdown.count("· 今日无记录") == 3  # 三个板块各一条（v1.12 移除协作沟通）
 
 
 # ---------- §6.4 时区约定：展示统一转换为本地时区 ----------
@@ -278,7 +264,7 @@ def test_times_rendered_in_local_timezone(monkeypatch):
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
     assert "· 实现登录页：未开始 → 进行中（18:00）" in markdown                # 10:00 UTC
-    assert "· [团队群] 张三：评审文档已上传（18:05）" in markdown              # 10:05 UTC
+    # v1.12：消息不再渲染；任务/考勤的本地时间转换仍是可达路径
 
 
 # ---------- v1.2：板块简化（保留部分） ----------
@@ -388,7 +374,7 @@ def test_overview_summarizes_across_members():
     assert markdown.index("## ▎今日概览") < markdown.index("## ▎张三")
     assert "· 代码提交 1 次，共 +10 / -3 行" in markdown
     assert "· 任务进展 1 项" in markdown
-    assert "· 协作沟通 1 条" in markdown
+    assert "· 协作沟通" not in markdown  # v1.12：概览不再出现协作沟通
     assert "· 工时统计 0 人，共 0 小时" in markdown
 
 
@@ -407,7 +393,7 @@ def test_overview_excludes_unconfigured_sources():
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
     assert "- · 代码提交 1 次，共 +10 / -3 行" in markdown
-    assert "- · 协作沟通 1 条" in markdown
+    assert "- · 协作沟通" not in markdown  # v1.12：概览不再出现协作沟通
     assert "- · 任务进展" not in markdown  # 未接入：整行不输出
     assert "- · 工时统计" not in markdown
 
@@ -425,7 +411,8 @@ def test_footer_contains_generator_and_sources():
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
 
     assert "🤖 由「智能日报生成器」自动生成" in markdown
-    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in markdown
+    assert "数据来源：GitHub、飞书任务、飞书考勤" in markdown
+    assert "飞书消息" not in markdown  # v1.12：数据来源不再列出消息
     assert re.search(r"｜ 生成时间 \d{4}-\d{2}-\d{2} \d{2}:\d{2}", markdown)
 
 
@@ -434,7 +421,7 @@ def test_footer_excludes_unconfigured_sources():
         "lark_task": "飞书任务未配置（collector.lark_task.project_id 为空或占位值）"})
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "数据来源：GitHub、飞书考勤、飞书消息" in markdown
+    assert "数据来源：GitHub、飞书考勤" in markdown
     assert "▪ 任务进展" not in markdown  # 未接入：板块不渲染
     assert "未接入" not in markdown      # 不出现任何未接入痕迹
 
@@ -475,7 +462,8 @@ def test_html_has_header_overview_and_footer():
     assert '<section class="card member-card">' in html
     assert '<footer class="report-foot">' in html
     assert "🤖 由「智能日报生成器」自动生成" in html
-    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in html
+    assert "数据来源：GitHub、飞书任务、飞书考勤" in html
+    assert "飞书消息" not in html
 
 
 def test_html_unconfigured_source_section_absent():
@@ -505,7 +493,7 @@ def test_footer_lists_configured_sources_including_failed():
     member = make_member(source_errors={"github": "请求超时"})
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
 
-    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in markdown
+    assert "数据来源：GitHub、飞书任务、飞书考勤" in markdown
 
 
 @pytest.mark.parametrize("reason,expected", [
@@ -563,22 +551,20 @@ def test_html_header_includes_data_range():
 
 
 def test_html_overview_cards_with_big_numbers():
-    """v1.5：概览卡片组——提交次数/变更行数/讨论条数，大号数字。"""
+    """v1.5：概览卡片组——提交次数/变更行数，大号数字；v1.12 移除讨论条数。"""
     html = generate([make_member()], REPORT_DATE, "研发一组").html
 
     assert '<section class="overview">' in html
-    assert html.count('class="stat-card"') == 3
+    assert html.count('class="stat-card"') == 2
     assert '<span class="stat-value">+10/-3</span>' in html
     assert '<span class="stat-label">提交次数</span>' in html
     assert '<span class="stat-label">变更行数</span>' in html
-    assert '<span class="stat-label">讨论条数</span>' in html
+    assert '讨论条数' not in html
 
 
-def test_html_overview_cards_exclude_unconfigured_sources():
-    """v1.5：未接入的源不出概览卡片（与 Markdown 概览规则一致）。"""
-    member = make_member(source_errors={
-        "lark_msg": "飞书消息未配置（collector.lark_msg.chat_id 为空或占位值）"})
-    html = generate([member], REPORT_DATE, "研发一组").html
+def test_html_overview_cards_exclude_discussion_count():
+    """v1.12：协作沟通移除后不再有「讨论条数」卡片。"""
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
 
     assert html.count('class="stat-card"') == 2  # 仅 GitHub 的提交次数/变更行数
     assert '讨论条数' not in html
@@ -593,7 +579,7 @@ def test_html_member_section_cards_with_icons():
     assert '💻 ▪ 代码提交' in html
     assert '📋 ▪ 任务进展' in html
     assert '⏱ ▪ 工时统计' in html
-    assert '💬 ▪ 协作沟通' in html
+    assert '💬 ▪ 协作沟通' not in html  # v1.12：协作沟通已移除
     assert '<span class="badge badge-ok">✅ 正常</span>' in html
     assert 'color: #16a34a' in html
 
@@ -616,7 +602,8 @@ def test_html_footer_light_gray_centered():
     assert 'background: #f3f4f6' in html
     assert 'text-align: center' in html
     assert '🤖 由「智能日报生成器」自动生成' in html
-    assert '数据来源：GitHub、飞书任务、飞书考勤、飞书消息' in html
+    assert '数据来源：GitHub、飞书任务、飞书考勤' in html
+    assert '飞书消息' not in html
 
 
 def test_html_responsive_stacks_cards_on_narrow_screens():
@@ -862,7 +849,7 @@ def test_overview_active_when_any_member_configured():
 
     assert "· 代码提交 2 次，共 +20 / -6 行" in markdown
     assert "· 工作分类：✨ 新功能 1 ｜ 🐛 修复 1" in markdown
-    assert "数据来源：GitHub、飞书任务、飞书考勤、飞书消息" in markdown
+    assert "数据来源：GitHub、飞书任务、飞书考勤" in markdown
     # 板块级规则不变：B 的「代码提交」板块仍不渲染
     assert "▪ 代码提交" not in markdown.split("## ▎李四")[1]
 
@@ -875,7 +862,8 @@ def test_overview_inactive_when_all_members_unconfigured():
 
     assert "· 代码提交" not in markdown
     assert "工作分类" not in markdown
-    assert "数据来源：飞书任务、飞书考勤、飞书消息" in markdown
+    assert "数据来源：飞书任务、飞书考勤" in markdown
+    assert "飞书消息" not in markdown
 
 
 def test_overview_all_inactive_without_members():
@@ -924,6 +912,23 @@ def test_overview_categories_and_highlights_include_unassigned():
     assert "· 🐛 fix: 修复文案（其他贡献，+10/-3 行）" in markdown
 
 
+def test_unassigned_messages_only_member_not_rendered():
+    """v1.12：消息板块移除后，仅含消息的伪成员不再输出空「其他贡献」段落。"""
+    unassigned = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
+                             commits=[], tasks=[],
+                             messages=[MessageRecord(
+                                 sender="ou_newbie_openid", content="登录联调已通过",
+                                 timestamp=datetime(2026, 9, 29, 17, 5, tzinfo=TZ),
+                                 chat_name="研发一组")],
+                             is_unassigned=True)
+    markdown = generate([make_member(), unassigned], REPORT_DATE, "研发一组").markdown
+    html = generate([make_member(), unassigned], REPORT_DATE, "研发一组").html
+
+    assert "其他贡献" not in markdown
+    assert "其他贡献" not in html
+    assert "登录联调已通过" not in markdown
+
+
 def test_unassigned_member_ignored_for_team_source_availability():
     """伪成员 source_errors 为空也不激活数据源：所有真实成员未配置 github 时，
     概览不出现代码提交行与工作分类行（_configured_sources 忽略伪成员）。"""
@@ -940,26 +945,137 @@ def test_unassigned_member_ignored_for_team_source_availability():
     assert "fix: X" in markdown
 
 
-def test_unassigned_member_messages_show_unrecognized_speaker():
-    """v1.9：伪成员的消息行发言人显示「未识别成员」——
-    不暴露 open_id 等内部标识，也不冒充具体成员姓名。"""
-    member = make_member(name=formatter.UNASSIGNED_MEMBER_NAME, github_username="",
-                         commits=[], tasks=[],
-                         messages=[MessageRecord(
-                             sender="ou_newbie_openid", content="登录联调已通过",
-                             timestamp=datetime(2026, 9, 29, 17, 5, tzinfo=TZ),
-                             chat_name="研发一组")],
-                         is_unassigned=True)
+# ---------- v1.12：仓库动态 + 近 7 天趋势，移除协作沟通 ----------
+
+def _repo_event(kind, number, title, hour=10, day=29):
+    return RepoEvent(kind=kind, number=number, title=title,
+                     timestamp=datetime(2026, 9, day, hour, 0, tzinfo=TZ),
+                     repo="org/repo")
+
+
+def _history_with_trend(values):
+    """构造含 trend 的 history（本周概况所需最小结构）。"""
+    history = {
+        "week": {"start": date(2026, 9, 29), "end": date(2026, 9, 29),
+                 "commits": 1, "additions": 10, "deletions": 3, "active_days": 1},
+        "last_week": {"start": date(2026, 9, 22), "end": date(2026, 9, 28),
+                      "commits": 0, "additions": 0, "deletions": 0, "active_days": 0},
+        "yesterday": None,
+        "trend": [{"date": f"2026-09-{23 + index:02d}", "commits": value}
+                  for index, value in enumerate(values)],
+    }
+    return history
+
+
+def test_collaboration_section_removed_from_markdown_and_html():
+    """v1.12：成员段、今日概览、落款数据来源三处都不再出现协作沟通。"""
+    member = make_member()
     markdown = generate([member], REPORT_DATE, "研发一组").markdown
+    html = generate([member], REPORT_DATE, "研发一组").html
 
-    assert "· [研发一组] 未识别成员：登录联调已通过（17:05）" in markdown
-    assert "其他贡献：" not in markdown       # 段落名不作为发言人出现
-    assert "ou_newbie_openid" not in markdown  # 内部标识不进入日报正文
+    assert "协作沟通" not in markdown
+    assert "协作沟通" not in html
+    assert "评审文档已上传" not in markdown  # 消息内容不再渲染
+    assert "讨论条数" not in markdown + html
+    assert "飞书消息" not in markdown
 
 
-def test_normal_member_messages_still_show_member_name():
-    """普通成员的消息行仍以成员姓名发言（v1.9 不影响既有展示规则）。"""
+def test_repo_events_five_categories_fixed_order():
+    """v1.12：五类仓库动态按固定顺序分组展示，位于今日亮点之后、成员之前。"""
+    events = [
+        _repo_event("release", 19, "v1.9", hour=18),
+        _repo_event("issue_opened", 7, "缓存命中率偏低", hour=12),
+        _repo_event("pr_merged", 4, "v1.9: 未归属记录归集", hour=14),
+        _repo_event("issue_closed", 2, "时区转换导致日期偏移", hour=16),
+        _repo_event("pr_opened", 5, "feat: 日报趋势展示", hour=15),
+    ]
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        repo_events=events).markdown
+
+    assert markdown.index("## ▎今日亮点") < markdown.index("## ▎仓库动态") \
+        < markdown.index("## ▎张三")
+    block = markdown.split("## ▎仓库动态")[1].split("## ▎张三")[0]
+    labels = ["合并 PR", "新建 PR", "关闭 Issue", "新建 Issue", "发布版本"]
+    positions = [block.index(f"- · {label}（1）") for label in labels]
+    assert positions == sorted(positions)  # 固定展示顺序
+    assert "  - #4 v1.9: 未归属记录归集（09-29）" in block
+    assert "  - #5 feat: 日报趋势展示（09-29）" in block
+    assert "  - #2 时区转换导致日期偏移（09-29）" in block
+    assert "  - #7 缓存命中率偏低（09-29）" in block
+    assert "  - v1.9（09-29）" in block      # Release 不带编号
+    assert "#19" not in block
+
+
+def test_repo_events_limit_five_and_overflow_line():
+    """v1.12：每类最多 5 条，超出显示「另有 N 条」。"""
+    events = [_repo_event("pr_merged", number, f"PR {number}", hour=number)
+              for number in range(1, 8)]
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        repo_events=events).markdown
+
+    block = markdown.split("## ▎仓库动态")[1].split("## ▎张三")[0]
+    assert "- · 合并 PR（7）" in block
+    assert block.count("  - #") == 5
+    assert "#5 PR 5" in block
+    assert "#6 PR 6" not in block
+    assert "- · 另有 2 条" in block
+
+
+def test_repo_events_empty_shows_placeholder():
+    """v1.12：采集成功但当天无动态 → 「今日无仓库动态」。"""
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        repo_events=[]).markdown
+
+    assert "## ▎仓库动态" in markdown
+    assert "- · 今日无仓库动态" in markdown
+
+
+def test_repo_events_unprovided_hides_section():
+    """v1.12：repo_events 未提供（None）→ 不渲染板块（向后兼容）。"""
     markdown = generate([make_member()], REPORT_DATE, "研发一组").markdown
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
 
-    assert "· [团队群] 张三：评审文档已上传（10:05）" in markdown
-    assert "未识别成员" not in markdown
+    assert "仓库动态" not in markdown
+    assert "仓库动态" not in html
+
+
+def test_repo_events_html_card():
+    """v1.12：HTML 版仓库动态复用成员卡片样式。"""
+    events = [_repo_event("pr_merged", 4, "v1.9: 未归属记录归集", hour=14)]
+    html = generate([make_member()], REPORT_DATE, "研发一组",
+                    repo_events=events).html
+
+    assert "▎仓库动态" in html
+    assert "#4 v1.9: 未归属记录归集" in html
+    assert html.index("▎今日亮点") < html.index("▎仓库动态") < html.index("▎张三")
+    # 本周概况 + 今日亮点 + 仓库动态 + 成员卡片
+    assert html.count('<section class="card member-card">') == 4
+
+
+def test_trend_line_sparkline_and_peak():
+    """v1.12：近 7 天趋势使用 ▁▂▃▄▅▆▇█，峰值取序列最大值。"""
+    history = _history_with_trend([1, 0, 3, 2, 0, 4, 2])
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=history).markdown
+
+    assert "- · 近 7 天：▂▁▆▄▁█▄（峰值 4 次）" in markdown
+    html = generate([make_member()], REPORT_DATE, "研发一组", history=history).html
+    assert "▂▁▆▄▁█▄" in html
+
+
+def test_trend_line_all_zero_uses_lowest_bar():
+    history = _history_with_trend([0, 0, 0, 0, 0, 0, 0])
+    markdown = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=history).markdown
+
+    assert "- · 近 7 天：▁▁▁▁▁▁▁（峰值 0 次）" in markdown
+
+
+def test_trend_line_missing_shows_placeholder():
+    """v1.12：无趋势数据（history 缺失或缺 trend 字段）→ 「暂无趋势数据」。"""
+    no_history = generate([make_member()], REPORT_DATE, "研发一组").markdown
+    no_trend = generate([make_member()], REPORT_DATE, "研发一组",
+                        history=_history_with_trend([])).markdown
+
+    assert "- · 近 7 天：暂无趋势数据" in no_history
+    assert "- · 近 7 天：暂无趋势数据" in no_trend

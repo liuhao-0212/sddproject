@@ -298,6 +298,19 @@
 - [ ] 未归属考勤仍只记日志
 - [ ] 全部测试通过
 
+## Task 22: 仓库动态 + 趋势，移除协作沟通（v1.12）
+描述: 删除协作沟通渲染；新增仓库动态（PR/Issue/Release）与近 7 天趋势
+输入: design.md §6.8、proposal.md §3.15
+输出: collector/github_activity.py（新增）、generator/formatter.py、generator/template.py、main.py、config.yaml.example、pipeline/fixtures、tests
+依赖: Task 21
+
+验收标准:
+- [ ] 协作沟通不再出现在 Markdown/HTML/概览/落款
+- [ ] 仓库动态五类事件正确采集与展示，上限与空态正确
+- [ ] 7 天趋势与峰值正确，缺数据降级
+- [ ] 飞书消息采集默认关闭
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

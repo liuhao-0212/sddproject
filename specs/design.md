@@ -302,3 +302,15 @@ CollectResult[T]:
 - 团队级数据源可用性（_configured_sources）忽略伪成员，避免空 source_errors 影响判定
 - 日志：未归属记录归入「其他贡献」，带 commits / tasks / messages 计数
 - 接口：MemberReport 新增 is_unassigned: bool = False（默认值保持向后兼容）
+
+### 6.8 仓库动态与趋势展示（v1.12）
+- 仓库动态数据源（GitHub REST）：
+  - PR：GET /repos/{repo}/pulls?state=all&sort=updated&direction=desc&per_page=100
+  - Issue：GET /repos/{repo}/issues?state=all&since={since}&per_page=100（排除含 pull_request 的条目）
+  - Release：GET /repos/{repo}/releases?per_page=30
+- 归类口径：合并 PR 用 merged_at；关闭 PR 用 closed_at（merged_at 为空）；新建用 created_at；Release 用 published_at
+- 展示顺序固定：合并 PR → 新建 PR → 关闭 Issue → 新建 Issue → 发布版本
+- 每类最多 5 条，超出显示「另有 N 条」；无数据显示「今日无仓库动态」
+- 7 天趋势：取 daily_stats 最近 7 个自然日提交数，缺失按 0；字符 ▁▂▃▄▅▆▇█ 按最大值归一化
+- 移除协作沟通：SOURCE_ORDER / SECTIONS / 概览 / 落款同步删除 lark_msg；MessageRecord 与 lark_msg 采集模块保留
+- daily_stats.messages_count 字段保留，写 0
