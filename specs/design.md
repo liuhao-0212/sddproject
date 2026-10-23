@@ -340,3 +340,9 @@ CollectResult[T]:
 - 分类新增：release 类别（🚀 版本发布），位于 fix 之后、perf 之前，优先级 2
 - 前缀识别：vX.Y[:] / release: / publish: / version:（大小写不敏感）
 - 其余分类与固定顺序保持不变
+### 6.11 本地运行环境（v1.15）
+- 加载顺序：系统环境变量 > `.env` > 代码默认值（`load_dotenv` 不覆盖已存在的变量）
+- 解析规则：忽略空行与 `#` 注释；支持 `export KEY=VALUE`；值可带单/双引号；不展开变量
+- 生效方式：`shared.config` 导入时自动调用 `load_dotenv()`，所有入口（main.py / show_report.py）共享
+- 一键运行：`run.bat`（CMD）与 `run.ps1`（PowerShell），内容等价于 `uv run python main.py`
+- 安全：`.env` 已在 `.gitignore`；仓库只提交 `.env.example`（占位值）

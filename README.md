@@ -65,7 +65,7 @@ proposal.md（做什么） → design.md（怎么做） → tasks.md（按什么
 ├── .claude/settings.json     # Claude Code hooks 配置
 ├── .github/workflows/        # 规范 CI
 │   └── spec-check.yml        #   PR 时自动检查规范完整性
-├── tests/                    # 298 个测试
+├── tests/                    # 317 个测试
 ├── main.py                   # 编排入口
 ├── config.yaml.example       # 配置模板
 └── CLAUDE.md                 # 规范索引（对抗 AI 上下文漂移）
@@ -89,6 +89,13 @@ cp config.yaml.example config.yaml
 ```
 
 ### 密钥（一律通过环境变量注入，禁止写入配置文件）
+推荐使用 `.env`（v1.15 起程序自动加载）：
+```bash
+cp .env.example .env
+# 编辑 .env 填入真实值；.env 已在 .gitignore 中，不会被提交
+```
+加载顺序：系统环境变量 > `.env` > 代码默认值（已存在的变量不会被 `.env` 覆盖）。
+
 | 变量 | 用途 |
 |---|---|
 | `GITHUB_TOKEN` | GitHub API 访问 |
@@ -103,10 +110,15 @@ python main.py --dry-run    # 采集 + 生成（不推送、不落库）
 python main.py              # 完整流程：采集 → 聚合 → 生成 → 推送 → 落库
 ```
 
+一键运行（v1.15）：
+- Windows 双击 / CMD：`run.bat`
+- PowerShell：`.un.ps1`
+（两者等价于 `uv run python main.py`，可追加参数，如 `run.bat --dry-run`）
+
 ## 5. 测试
 
 ```bash
-uv run pytest -q      # 298 passed
+uv run pytest -q      # 317 passed
 ```
 
 覆盖：单元测试（各模块）+ 端到端集成测试（正常/降级/空数据/全失败四种场景）。
@@ -135,6 +147,13 @@ uv run pytest -q      # 298 passed
 | v1.0 | 三源采集 + 日报生成 + 邮件/飞书推送 | 初始三份规范 + 10 个任务 |
 | v1.1 | 新增飞书考勤采集 + 日报"工时统计"板块 | 三份规范同步更新（新增 `AttendanceRecord`、ADR-003） |
 | 修复 | 采集器异常兜底、时区缺陷（采集窗口与展示统一本地时区） | design.md 新增 §6.4 时区约定 |
+| v1.7 | 日报历史查询与导出（`--history` / `--show` / `--export`） | proposal §3.10 / design §6.3 / Task 17 |
+| v1.8 | 提交按 Conventional Commits 归类 + 今日亮点 | proposal §3.11 / design §6.5 / Task 18 |
+| v1.9 | 未归属记录归集（其他贡献） | proposal §3.12 / design §6.5 / Task 19 |
+| v1.12 | 仓库动态（PR/Issue/Release）+ 近 7 天趋势，移除协作沟通 | proposal §3.15 / design §6.8 / Task 22 |
+| v1.13 | 飞书考勤接入修复（user_tasks + employee_id 回退） | proposal §3.16 / design §6.9 / Task 23 |
+| v1.14 | 趋势校准 + 版本发布分类（🚀） | proposal §3.17 / design §6.10 / Task 24 |
+| v1.15 | `.env` 自动加载 + 一键运行脚本 | proposal §3.18 / design §6.11 / Task 25 |
 
 ## 8. 参考
 

@@ -3,7 +3,9 @@
 import yaml
 import pytest
 
-from shared.config import env, load_config
+import os
+
+from shared.config import env, load_config, load_dotenv
 from shared.errors import ConfigError
 
 VALID = {
@@ -109,3 +111,39 @@ def test_env_helper(monkeypatch):
     monkeypatch.setenv("TEST_SECRET", "s3cret")
     assert env("TEST_SECRET") == "s3cret"
     assert env("NOT_SET_KEY", "fallback") == "fallback"
+# ---------- v1.15：.env 自动加载 ----------
+
+def test_load_dotenv_parses_and_injects(tmp_path, monkeypatch):
+    for name in ("DOTENV_TEST_A", "DOTENV_TEST_B", "DOTENV_TEST_C"):
+        monkeypatch.delenv(name, raising=False)
+    path = tmp_path / ".env"
+    path.write_text(
+        "# 注释行\n"
+        "\n"
+        "DOTENV_TEST_A=value\n"
+        "export DOTENV_TEST_B='quoted value'\n"
+        'DOTENV_TEST_C="dq"\n'
+        "没有等号的行\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_dotenv(path)
+
+    assert loaded == 3
+    assert os.environ["DOTENV_TEST_A"] == "value"
+    assert os.environ["DOTENV_TEST_B"] == "quoted value"
+    assert os.environ["DOTENV_TEST_C"] == "dq"
+
+
+def test_load_dotenv_does_not_override_existing(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOTENV_TEST_KEEP", "shell")
+    path = tmp_path / ".env"
+    path.write_text("DOTENV_TEST_KEEP=file\n", encoding="utf-8")
+
+    load_dotenv(path)
+
+    assert os.environ["DOTENV_TEST_KEEP"] == "shell"
+
+
+def test_load_dotenv_missing_file_is_noop(tmp_path):
+    assert load_dotenv(tmp_path / "missing.env") == 0
