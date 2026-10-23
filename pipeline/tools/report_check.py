@@ -18,7 +18,8 @@ import os
 import re
 import sys
 
-SECTIONS = ("代码提交", "任务进展", "工时统计", "协作沟通")
+# v1.12：协作沟通已从日报移除；仓库动态为可选板块（依赖仓库事件），不列为必备
+SECTIONS = ("代码提交", "任务进展", "工时统计")
 UNAVAILABLE_MARKERS = ("暂不可用", "不可用", "受限", "连接失败", "获取失败", "获取异常")
 INTERNAL_LEAKS = ("凭据未配置", "未授权", "缺少飞书用户标识", "Traceback", "CollectorError",
                   "Error:", "Exception", "os.environ", "LARK_APP_SECRET")

@@ -9,8 +9,8 @@
 
 一个自动化日报工具：从团队现有的协作平台采集当日工作数据，聚合生成结构化日报，并推送给相关干系人。
 
-- **采集**：GitHub Commit、飞书任务、飞书群消息、飞书考勤（v1.1）
-- **生成**：按「代码提交 → 任务进展 → 工时统计 → 协作沟通」四段式编排
+- **采集**：GitHub Commit / PR / Issue / Release、飞书任务、飞书考勤（飞书群消息默认关闭）
+- **生成**：按「代码提交 → 任务进展 → 工时统计」编排，新增「仓库动态」与近 7 天趋势（v1.12）
 - **推送**：SMTP 邮件（HTML）+ 飞书机器人（Markdown）
 - **降级**：单数据源失败不阻断其他源，日报中显式标注"数据获取失败"
 
@@ -65,7 +65,7 @@ proposal.md（做什么） → design.md（怎么做） → tasks.md（按什么
 ├── .claude/settings.json     # Claude Code hooks 配置
 ├── .github/workflows/        # 规范 CI
 │   └── spec-check.yml        #   PR 时自动检查规范完整性
-├── tests/                    # 146 个测试
+├── tests/                    # 298 个测试
 ├── main.py                   # 编排入口
 ├── config.yaml.example       # 配置模板
 └── CLAUDE.md                 # 规范索引（对抗 AI 上下文漂移）
@@ -106,7 +106,7 @@ python main.py              # 完整流程：采集 → 聚合 → 生成 → �
 ## 5. 测试
 
 ```bash
-uv run pytest -q      # 146 passed
+uv run pytest -q      # 298 passed
 ```
 
 覆盖：单元测试（各模块）+ 端到端集成测试（正常/降级/空数据/全失败四种场景）。

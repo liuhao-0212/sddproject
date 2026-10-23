@@ -34,6 +34,9 @@ collector:
   lark_task:
     project_id: "your-lark-project-id"
   lark_msg:
+    # v1.12：飞书消息采集默认关闭（协作沟通板块已移除）；采集代码与配置保留，
+    # 需要时改为 true 即可恢复采集（日报仍不渲染协作沟通）
+    enabled: false
     chat_id: "oc_xxxxxxxx"
     # 项目强相关讨论的关键词过滤器
     keywords: ["上线", "发布", "评审", "联调"]

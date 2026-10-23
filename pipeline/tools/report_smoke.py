@@ -17,7 +17,7 @@ import json
 import os
 import sys
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 def build_members(payload, app_dir):
@@ -118,6 +118,70 @@ def build_members(payload, app_dir):
     return members
 
 
+def build_repo_events(payload, app_dir):
+    """把 fixture 的 repo_events 装配成生成层对象（v1.12）。
+
+    缺失该字段时返回 None——生成层据此不渲染「仓库动态」板块（保持原行为）；
+    空列表表示已采集但当天无动态（显示「今日无仓库动态」）。
+    """
+    raw_events = payload.get("repo_events")
+    if raw_events is None:
+        return None
+    sys.path.insert(0, app_dir)
+    from collector.github_activity import RepoEvent
+
+    return [
+        RepoEvent(
+            kind=raw["kind"],
+            number=raw.get("number"),
+            title=raw.get("title", ""),
+            timestamp=datetime.fromisoformat(raw["timestamp"]),
+            repo=raw.get("repo", ""),
+            author=raw.get("author", ""),
+            url=raw.get("url", ""),
+        )
+        for raw in raw_events
+    ]
+
+
+def build_history(payload, report_date, members):
+    """把 fixture 的 trend 装配成生成层 history（v1.12）。
+
+    缺失 trend 时返回 None——本周概况显示「暂无历史数据 / 暂无趋势数据」（原行为）；
+    trend 支持 [1, 0, 3, ...] 与 [{"date": "...", "commits": n}] 两种写法。
+    """
+    raw_trend = payload.get("trend")
+    if raw_trend is None:
+        return None
+    week_start = report_date - timedelta(days=report_date.weekday())
+    commits = sum(len(member.commits) for member in members)
+    history = {
+        "week": {
+            "start": week_start,
+            "end": report_date,
+            "commits": commits,
+            "additions": sum(c.additions for m in members for c in m.commits),
+            "deletions": sum(c.deletions for m in members for c in m.commits),
+            "active_days": 1 if commits else 0,
+        },
+        "last_week": {"start": week_start - timedelta(days=7),
+                      "end": week_start - timedelta(days=1),
+                      "commits": 0, "additions": 0, "deletions": 0, "active_days": 0},
+        "yesterday": None,
+        "trend": [],
+    }
+    total = len(raw_trend)
+    for index, item in enumerate(raw_trend):
+        if isinstance(item, dict):
+            day = item.get("date") or (report_date - timedelta(days=total - 1 - index)).isoformat()
+            value = item.get("commits", 0)
+        else:
+            day = (report_date - timedelta(days=total - 1 - index)).isoformat()
+            value = item
+        history["trend"].append({"date": str(day), "commits": int(value)})
+    return history
+
+
 def main(argv=None):
     """命令行入口。"""
     parser = argparse.ArgumentParser(description="部署后冒烟测试（固定数据集）")
@@ -143,6 +207,7 @@ def main(argv=None):
     print("[smoke] 数据集：%s（成员 %d 人）" % (args.fixture, len(payload["members"])))
     try:
         members = build_members(payload, app_dir)
+        repo_events = build_repo_events(payload, app_dir)
         from generator.formatter import generate  # noqa: PLC0415 - 需在 sys.path 就绪后导入
     except Exception as exc:
         print("[smoke] FAIL 导入部署代码失败：%s" % exc)
@@ -152,8 +217,10 @@ def main(argv=None):
     report_date = date.fromisoformat(payload["date"])
     window = (datetime.combine(report_date, datetime.min.time()),
               datetime.combine(report_date, datetime.max.time()))
+    history = build_history(payload, report_date, members)
     try:
-        report = generate(members, report_date, payload["team_name"], window=window)
+        report = generate(members, report_date, payload["team_name"], window=window,
+                          history=history, repo_events=repo_events)
     except Exception as exc:
         print("[smoke] FAIL 生成日报抛异常：%s" % exc)
         traceback.print_exc()

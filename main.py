@@ -13,6 +13,8 @@
   探测（区分“失败”与“为空”），考勤经 CollectResult.success 探测（ADR-003），
   失败原因填入 MemberReport.source_errors 并记日志，生成层据此在日报中
   显示可读说明（v1.4 修订，design.md §6.5；原始异常只进日志）
+- v1.12：飞书消息采集默认关闭（collector.lark_msg.enabled=false）；仓库动态采集
+  失败时置 None（日报隐藏该板块）并记日志；近 7 天趋势从 daily_stats 组装
 - 所有数据源失败时不生成空日报，记录错误日志并发送告警邮件
 - 推送渠道互为备份告警通道：邮件失败经飞书告警，飞书失败经邮件告警
 - 推送渠道未配置时跳过（不推送、不告警），仅「已配置且发送失败」触发备份告警（v1.2）
@@ -29,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import collector.github as github
+import collector.github_activity as github_activity
 import collector.lark_attendance as lark_attendance
 import collector.lark_msg as lark_msg
 import collector.lark_task as lark_task
@@ -105,6 +108,17 @@ def _run(dry_run: bool) -> int:
     commits = github.collect(cfg["collector"]["github"]["repos"], since, until)
     logger.info("数据源采集完成", extra={"source": "github", "count": len(commits)})
 
+    # 仓库动态（v1.12）：与 commits 同一窗口；失败时置 None（日报隐藏该板块）
+    try:
+        repo_events = github_activity.collect(cfg["collector"]["github"]["repos"],
+                                              since, until)
+        logger.info("数据源采集完成",
+                    extra={"source": "github_activity", "count": len(repo_events)})
+    except Exception as exc:  # CollectorError 及其他兜底：单源失败不阻断日报
+        repo_events = None
+        logger.error("github 仓库动态采集失败，日报将隐藏该板块",
+                     extra={"reason": str(exc)}, exc_info=exc)
+
     tasks_collected = _is_configured(cfg["collector"]["lark_task"]["project_id"])
     if tasks_collected:
         tasks = lark_task.collect(cfg["collector"]["lark_task"]["project_id"], since, until)
@@ -113,14 +127,24 @@ def _run(dry_run: bool) -> int:
         tasks = []
         logger.info("飞书任务未配置，跳过采集", extra={"source": "lark_task"})
 
-    messages_collected = _is_configured(cfg["collector"]["lark_msg"]["chat_id"])
+    # 飞书消息（v1.12）：默认关闭（collector.lark_msg.enabled=false）；
+    # 采集代码与测试保留，关闭时不发请求、不进入日报
+    lark_msg_cfg = cfg["collector"]["lark_msg"]
+    messages_enabled = bool(lark_msg_cfg.get("enabled", False))
+    messages_collected = messages_enabled and _is_configured(lark_msg_cfg["chat_id"])
     if messages_collected:
-        messages = lark_msg.collect(cfg["collector"]["lark_msg"]["chat_id"],
-                                    cfg["collector"]["lark_msg"]["keywords"], since, until)
+        messages = lark_msg.collect(lark_msg_cfg["chat_id"],
+                                    lark_msg_cfg["keywords"], since, until)
         logger.info("数据源采集完成", extra={"source": "lark_msg", "count": len(messages)})
+        messages_error = lark_msg.get_last_error()
+    elif messages_enabled:
+        messages = []
+        messages_error = "飞书消息未配置（collector.lark_msg.chat_id 为空或占位值）"
+        logger.info("飞书消息未配置，跳过采集", extra={"source": "lark_msg"})
     else:
         messages = []
-        logger.info("飞书消息未配置，跳过采集", extra={"source": "lark_msg"})
+        messages_error = "飞书消息采集未启用（collector.lark_msg.enabled=false）"
+        logger.info("飞书消息采集未启用，跳过", extra={"source": "lark_msg"})
 
     # 考勤（v1.1）：失败经 CollectResult.error 显式返回（ADR-003）；凭据缺失跳过采集
     attendance_collected = bool(env("LARK_APP_ID")) and bool(env("LARK_APP_SECRET"))
@@ -145,10 +169,12 @@ def _run(dry_run: bool) -> int:
         "github": github.get_last_error(),
         "lark_task": lark_task.get_last_error() if tasks_collected
                      else "飞书任务未配置（collector.lark_task.project_id 为空或占位值）",
-        "lark_msg": lark_msg.get_last_error() if messages_collected
-                    else "飞书消息未配置（collector.lark_msg.chat_id 为空或占位值）",
         "lark_attendance": attendance_error,
     }
+    # v1.12：飞书消息默认关闭时不算作「数据源不可用」（也不参与全失败判定）；
+    # 仅启用后仍失败/未配置才记录，供采集层诊断（展示层已无该板块）
+    if messages_enabled:
+        source_errors["lark_msg"] = messages_error
 
     # 2) 所有数据源均不可用：不生成空日报，记录错误日志 + 告警邮件（§6.1）
     if all(source_errors.values()):
@@ -162,9 +188,11 @@ def _run(dry_run: bool) -> int:
                          attendance_result.data if attendance_result else [], source_errors)
 
     # 4) 生成日报（window 为采集窗口，用于头部“数据范围”，v1.3；
-    #    v1.6：先读历史统计组装 history，读不到时传 None，不影响日报生成）
+    #    v1.6：先读历史统计组装 history，读不到时传 None，不影响日报生成；
+    #    v1.12：repo_events 为 None 时仓库动态板块不渲染）
     history = _load_history(cfg, today, members)
-    report = generate(members, today, cfg["team_name"], window=(since, until), history=history)
+    report = generate(members, today, cfg["team_name"], window=(since, until),
+                      history=history, repo_events=repo_events)
 
     if dry_run:
         logger.info("dry-run 模式：跳过推送与落库")
@@ -176,8 +204,9 @@ def _run(dry_run: bool) -> int:
         stats = _today_stats(report.members)
         storage = Storage(db_path)
         storage.save_report(today, cfg["team_name"], report.markdown, report.html)
+        # v1.12：协作沟通已从日报移除，messages_count 字段保留、固定写 0
         storage.save_stats(today, cfg["team_name"], stats["commits"], stats["additions"],
-                           stats["deletions"], stats["messages"])
+                           stats["deletions"], 0)
         logger.info("日报已写入本地存储", extra={"db_path": db_path})
     except ReportError as exc:
         logger.error("日报写入存储失败", extra={"reason": str(exc)}, exc_info=exc)
@@ -512,13 +541,15 @@ def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict |
                                               week_start - timedelta(days=1))
         y_rows = storage.get_stats_between(today - timedelta(days=1),
                                            today - timedelta(days=1))
+        # v1.12：近 7 个自然日提交趋势（含今天；缺失日期按 0 补齐）
+        trend_rows = storage.get_stats_between(today - timedelta(days=6), today)
     except ReportError as exc:
         logger.error("读取历史统计失败，本周概况将显示「暂无历史数据」",
                      extra={"reason": str(exc)}, exc_info=exc)
         return None
     today_stats = _today_stats(members)
     today_active = bool(today_stats["commits"] or today_stats["messages"])
-    if not (week_rows or last_rows or y_rows) and not today_active:
+    if not (week_rows or last_rows or y_rows or trend_rows) and not today_active:
         return None  # 历史为空且当日无数据：没有可展示的趋势
     week = _stats_totals(week_rows)
     week["commits"] += today_stats["commits"]
@@ -537,7 +568,19 @@ def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict |
         yesterday = {"commits": yesterday_rows["commits"],
                      "additions": yesterday_rows["additions"],
                      "deletions": yesterday_rows["deletions"]}
-    return {"week": week, "last_week": last_week, "yesterday": yesterday}
+    return {"week": week, "last_week": last_week, "yesterday": yesterday,
+            "trend": _build_trend(trend_rows, today)}
+
+
+def _build_trend(rows: list[dict], today: date) -> list[dict]:
+    """近 7 天提交趋势（v1.12，design.md §6.8）：取 daily_stats 最近 7 个自然日，
+    无记录的日期按 0 补齐；返回按日期升序的 [{"date", "commits"}]。"""
+    counts = {str(row["date"]): row["commits_count"] for row in rows}
+    trend: list[dict] = []
+    for offset in range(6, -1, -1):
+        day = (today - timedelta(days=offset)).isoformat()
+        trend.append({"date": day, "commits": counts.get(day, 0)})
+    return trend
 
 
 def _alert_report(today: date, team_name: str, message: str) -> DailyReport:

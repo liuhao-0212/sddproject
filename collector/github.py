@@ -89,6 +89,12 @@ def _get_client() -> httpx.Client:
     return httpx.Client(headers=headers, timeout=DEFAULT_TIMEOUT)
 
 
+def get_client() -> httpx.Client:
+    """公开的客户端构造入口（v1.12）：供 collector.github_activity 复用，
+    行为与 _get_client 完全一致（含环境变量注入与超时）。"""
+    return _get_client()
+
+
 def _collect_repo(client: httpx.Client, repo: str, since: datetime, until: datetime) -> list[CommitRecord]:
     """采集单个仓库的 Commit 记录；失败时记录错误日志并返回空列表。"""
     global _last_error
@@ -228,6 +234,12 @@ def _request_with_retry(client: httpx.Client, method: str, url: str, **kwargs: A
             _sleep(wait)
             continue
         raise CollectorError(f"github 接口返回错误状态 {resp.status_code}: {method} {url}")
+
+
+def request_with_retry(client: httpx.Client, method: str, url: str, **kwargs: Any) -> httpx.Response:
+    """公开的带重试请求入口（v1.12）：供 collector.github_activity 复用，
+    行为与 _request_with_retry 完全一致（超时/限流重试，耗尽抛 CollectorError）。"""
+    return _request_with_retry(client, method, url, **kwargs)
 
 
 def _is_rate_limited(resp: httpx.Response) -> bool:
