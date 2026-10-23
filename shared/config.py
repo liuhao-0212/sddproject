@@ -5,6 +5,7 @@
 - 每次调用都重新读取文件：定时任务下次执行自动生效，无需重启（配置热更新）
 - 敏感信息（API 密钥）一律通过环境变量注入，严禁写入配置文件（design.md §6.2），
   统一使用 env() 读取
+- v1.15：导入时自动加载项目根目录 .env（已存在的环境变量优先，不覆盖）
 """
 
 from __future__ import annotations
@@ -18,6 +19,49 @@ import yaml
 from shared.errors import ConfigError
 
 DEFAULT_DB_PATH = "data/report.db"
+
+
+def load_dotenv(path: str | Path | None = None) -> int:
+    """把 .env 中的键值注入 os.environ（v1.15）。
+
+    - 已存在的环境变量优先（不覆盖），因此 shell / CI 注入的凭据仍然生效
+    - 支持注释、空行、`export KEY=VALUE`、单/双引号
+    - 文件不存在或读取失败时静默返回 0（不影响正常运行）
+    """
+    p = Path(path) if path is not None else DEFAULT_DOTENV_PATH
+    if not p.is_file():
+        return 0
+    try:
+        text = p.read_text(encoding="utf-8-sig")
+    except OSError:
+        return 0
+    loaded = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key not in os.environ:
+            os.environ[key] = value
+            loaded += 1
+    return loaded
+
+
+# 项目根目录的 .env（v1.15）：shared/config.py 位于 <项目根>/shared/ 下
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DOTENV_PATH = PROJECT_ROOT / ".env"
+# 模块导入时自动加载（缺失时无副作用；已存在的环境变量不覆盖）
+load_dotenv()
 
 
 def env(name: str, default: str = "") -> str:

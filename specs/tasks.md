@@ -337,6 +337,19 @@
 - [ ] 工作分类与今日亮点按新类别展示
 - [ ] 全部测试通过
 
+## Task 25: 本地运行体验（v1.15）
+描述: 自动加载 .env、提供 .env.example 与一键运行脚本
+输入: design.md §6.11、proposal.md §3.18
+输出: shared/config.py、.env.example、run.bat、run.ps1、README、tests
+依赖: Task 24
+
+验收标准:
+- [ ] 导入 shared.config 自动加载 .env，且不覆盖已有环境变量
+- [ ] 解析支持注释/空行/export/引号
+- [ ] .env 缺失时无副作用
+- [ ] .env.example 与一键运行脚本已提供
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）
