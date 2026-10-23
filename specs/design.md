@@ -314,3 +314,22 @@ CollectResult[T]:
 - 7 天趋势：取 daily_stats 最近 7 个自然日提交数，缺失按 0；字符 ▁▂▃▄▅▆▇█ 按最大值归一化
 - 移除协作沟通：SOURCE_ORDER / SECTIONS / 概览 / 落款同步删除 lark_msg；MessageRecord 与 lark_msg 采集模块保留
 - daily_stats.messages_count 字段保留，写 0
+
+### 6.9 飞书考勤接口契约（v1.13）
+- 端点：POST /open-apis/attendance/v1/user_stats_datas/query?employee_type=employee_id
+- 查询参数：employee_type（employee_id / employee_no）
+- 请求体：locale=zh、stats_type=daily、start_date/end_date 为整数 yyyyMMdd、user_ids 为 employee_id 列表
+- 员工标识：members[].attendance 优先；否则用 members[].lark（open_id）调
+  GET /open-apis/contact/v3/users/{open_id}?user_id_type=open_id 取 data.user.employee_id
+- 无法解析 employee_id → 按未接入处理；有 employee_id 但接口失败 → 板块显示可读原因
+- 调试期：解析不出记录时记录原始响应（截断 2000 字符）
+
+#### 修订（v1.13 实测校准）
+- 改用 POST /open-apis/attendance/v1/user_tasks/query?employee_type=employee_id
+- 请求体：user_ids / check_date_from / check_date_to（整数 yyyyMMdd）
+- 响应：data.user_task_results[]，每项含 day / user_id / records[]
+- 每条 record 含 check_in_record.check_time / check_out_record.check_time /
+  check_in_result / check_out_result
+- 员工 ID 解析顺序：members[].attendance → contact.user.employee_id → contact.user.user_id
+- 同一天多条 record 合并：最早 check_in + 最晚 check_out；状态取第一条非「正常」
+- 无记录返回空列表且 success=True（不是错误）

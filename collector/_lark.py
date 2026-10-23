@@ -118,7 +118,13 @@ def request_with_retry(client: httpx.Client, method: str, url: str,
             continue
         if resp.status_code == 200:
             return resp
-        raise CollectorError(f"飞书接口返回错误状态 {resp.status_code}: {method} {url}")
+        # 非 2xx：附响应体摘要（截断 500 字符）便于定位，仅取 body，不携带请求头
+        try:
+            body = resp.text[:500]
+        except Exception:
+            body = "<unreadable>"
+        raise CollectorError(
+            f"飞书接口返回错误状态 {resp.status_code}: {method} {url} | body={body}")
 
 
 def to_utc(ts: datetime) -> datetime:

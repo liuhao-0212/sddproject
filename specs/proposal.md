@@ -161,3 +161,12 @@
 - [ ] 「本周概况」新增近 7 天提交趋势（▁▂▃▄▅▆▇█），含峰值
 - [ ] 历史数据不足 7 天按 0 补齐；完全无数据显示「暂无趋势数据」
 - [ ] 全部测试通过
+
+### 3.16 v1.13 新增验收（飞书考勤接入修复）
+- [ ] 考勤请求使用官方路径 /attendance/v1/user_stats_datas/query（datas 复数）
+- [ ] employee_type 作为 URL 查询参数传入，值为 employee_id（不再用 email）
+- [ ] 请求体使用 locale / stats_type / start_date / end_date / user_ids（整数日期 yyyyMMdd）
+- [ ] members 支持可选 attendance 字段（员工 employee_id）；缺省时用 lark（open_id）经通讯录接口解析
+- [ ] 解析失败时把真实响应写入日志（截断 2000 字符）
+- [ ] 404 文案改为「接口 404（路径错误或考勤模块未开通）」
+- [ ] 全部测试通过

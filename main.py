@@ -433,7 +433,7 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
     """按 config 的 members 映射表把各类记录聚合成成员报告（design.md §3.3）。
 
     GitHub 记录按 github 用户名匹配；飞书记录按 lark 用户名或成员姓名匹配；
-    考勤记录按 employee_id 与 lark 用户名匹配。
+    考勤记录优先按 members[].attendance（employee_id）匹配，其次按 lark 匹配。
     v1.9：未匹配到任何成员的提交/任务/消息不再丢弃，统一归入
     「其他贡献」伪成员（design.md §6.5）；考勤按人-日维度无法归属，
     仍只记告警、不归集。
@@ -445,6 +445,7 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
     matched_messages: set[int] = set()
     assigned_attendance = 0
     attendance_by_employee: dict[str, AttendanceRecord] = {}
+    resolved_attendance_ids = lark_attendance.get_last_employee_ids()
     for record in attendance:
         attendance_by_employee[record.employee_id] = record  # 同员工多条取最后一条
     for member_cfg in cfg["members"]:
@@ -454,7 +455,18 @@ def _aggregate(cfg: dict, commits: list, tasks: list, messages: list,
         member_commits = [c for c in commits if github_name and c.author == github_name]
         member_tasks = [t for t in tasks if _matches(t.assignee, lark_name, name)]
         member_messages = [m for m in messages if _matches(m.sender, lark_name, name)]
-        member_attendance = attendance_by_employee.get(lark_name) if lark_name else None
+        # v1.13：考勤记录以 employee_id/user_id 为键；先匹配显式配置与解析结果，
+        # 再回退到 lark 标识（集成测试/未走真实解析时仍按原方式匹配）
+        explicit_attendance = str(member_cfg.get("attendance") or "")
+        attendance_keys = [
+            explicit_attendance,
+            resolved_attendance_ids.get(explicit_attendance, ""),
+            lark_name,
+            resolved_attendance_ids.get(lark_name, ""),
+        ]
+        member_attendance = next(
+            (attendance_by_employee[key] for key in attendance_keys
+             if key and key in attendance_by_employee), None)
         matched_commits.update(id(c) for c in member_commits)
         matched_tasks.update(id(t) for t in member_tasks)
         matched_messages.update(id(m) for m in member_messages)
