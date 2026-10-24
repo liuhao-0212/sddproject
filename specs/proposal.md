@@ -203,3 +203,12 @@
 - [ ] 周报只生成文件，不推送、不落库
 - [ ] 与 --check / --dry-run / --history / --show / --export 互斥
 - [ ] 全部测试通过
+
+### 3.21 v1.18 新增验收（只读 Web 界面）
+- [ ] `python main.py --serve [--port N]` 启动本地只读 Web 界面，仅绑定 127.0.0.1
+- [ ] 首页列出最近日报（按日期倒序）与已有周报
+- [ ] /report/<日期> 展示该日最新日报 HTML；/report/<日期>.md 返回 Markdown 原文
+- [ ] /weekly/<日期> 展示 output/weekly-<日期>.html
+- [ ] 未知路径/日期返回 404；不写库、不推送
+- [ ] 使用标准库 http.server，不新增运行时依赖
+- [ ] 全部测试通过

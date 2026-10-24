@@ -8,6 +8,7 @@
     python main.py --show DATE            # 只读：打印指定日期日报 Markdown（v1.7）
     python main.py --export DATE          # 只读：导出指定日期日报到 output/（v1.7）
     python main.py --weekly               # 生成本周周报到 output/（v1.17）
+    python main.py --serve [--port 8000]  # 只读 Web 界面：浏览历史日报与周报（v1.18）
 
 错误处理（design.md §6.1）:
 - 单个数据源失败不阻断其他数据源；github/lark_task/lark_msg 经 get_last_error()
@@ -39,6 +40,7 @@ import collector.lark_task as lark_task
 from collector.lark_attendance import AttendanceRecord
 from generator import DailyReport, MemberReport, generate
 from generator.weekly import generate_weekly
+from webapp import serve as serve_web
 from generator.formatter import UNASSIGNED_MEMBER_NAME
 from notifier import email as email_notifier
 from notifier import lark_bot as lark_bot_notifier
@@ -68,8 +70,10 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--show", metavar="DATE", help="打印指定日期日报 Markdown（只读，v1.7）")
     group.add_argument("--export", metavar="DATE", help="导出指定日期日报为文件（只读，v1.7）")
     group.add_argument("--weekly", action="store_true", help="生成本周周报（不推送，v1.17）")
+    group.add_argument("--serve", action="store_true", help="启动只读 Web 界面（v1.18）")
     parser.add_argument("--days", default="30",
                         help="--history 的查询天数（正整数，默认 30）")
+    parser.add_argument("--port", type=int, default=8000, help="--serve 的监听端口（默认 8000）")
     args = parser.parse_args(argv)
     if args.check:
         return check()
@@ -81,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         return export(args.export)
     if args.weekly:
         return weekly()
+    if args.serve:
+        return serve_web(args.port)
     return run(dry_run=args.dry_run)
 
 

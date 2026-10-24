@@ -108,6 +108,8 @@ cp .env.example .env
 python main.py --check      # 健康检查：验证配置与各 API 连通性
 python main.py --dry-run    # 采集 + 生成（不推送、不落库）
 python main.py              # 完整流程：采集 → 聚合 → 生成 → 推送 → 落库
+python main.py --weekly     # 生成本周周报（只写 output/，不推送）
+python main.py --serve      # 只读 Web 界面：http://127.0.0.1:8000/
 ```
 
 一键运行（v1.15）：
