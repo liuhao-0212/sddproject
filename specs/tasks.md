@@ -350,6 +350,18 @@
 - [ ] .env.example 与一键运行脚本已提供
 - [ ] 全部测试通过
 
+## Task 26: 展示口径清晰化 + 预览工具（v1.16）
+描述: 「本周概况」改名「本周累计」；近 7 天趋势移入今日概览；show_report.py 与真实日报对齐
+输入: design.md §6.12、proposal.md §3.19
+输出: generator/formatter.py、generator/template.py、show_report.py、tests
+依赖: Task 25
+
+验收标准:
+- [ ] 「本周累计」只含周一~当日累计与较上周
+- [ ] 「近 7 天」出现在今日概览（Markdown/HTML 一致）
+- [ ] show_report.py 含历史趋势与仓库动态，且不推送、不落库
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

@@ -193,6 +193,7 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
         "week_html": _week_html(history),
         "overview_cards": _overview_cards(stats, history),
+        "trend_html": _trend_html(history),
         "highlights_html": _highlights_html(members),
         "repo_html": _repo_events_html(repo_events),
         "member_sections": _member_html_blocks(members),
@@ -260,19 +261,18 @@ def _overview_stats(members: list[MemberReport]) -> dict:
 
 
 def _render_week(history: dict | None) -> list[str]:
-    """本周概况（v1.6，design.md §6.5）：位于今日概览之前，展示本周（周一~当日）
-    提交/变更/活跃天数与较上周对比；history 为 None（无历史数据）时显示
-    「暂无历史数据」，不报错。
-    v1.12：追加近 7 天提交趋势（▁▂▃▄▅▆▇█ + 峰值）；无 trend 显示「暂无趋势数据」。"""
-    lines = ["## ▎本周概况", ""]
+    """本周累计（v1.16，原「本周概况」；design.md §6.12）：位于今日概览之前，
+    展示本周（周一~当日）提交/变更/活跃天数与较上周对比；
+    history 为 None（无历史数据）时显示「暂无历史数据」，不报错。
+    v1.16：近 7 天趋势移到「今日概览」，本板块只保留累计与对比。"""
+    lines = ["## ▎本周累计", ""]
     if not history:
-        lines += ["- · 暂无历史数据", _trend_line(history), ""]
+        lines += ["- · 暂无历史数据", ""]
         return lines
     week = history["week"]
     lines.append(f"- · 提交 {week['commits']} 次 ｜ 变更 +{week['additions']} / -{week['deletions']} 行")
     diff = week["commits"] - history["last_week"]["commits"]
     lines.append(f"- · 活跃 {week['active_days']} 天 ｜ 📈 较上周：提交 {_signed(diff)} 次")
-    lines.append(_trend_line(history))
     lines.append("")
     return lines
 
@@ -328,6 +328,8 @@ def _render_overview(members: list[MemberReport], history: dict | None = None) -
         lines.append(f"- · 任务进展 {stats['tasks']} 项")
     if active["lark_attendance"]:
         lines.append(f"- · 工时统计 {stats['attended']} 人，共 {stats['hours']:g} 小时")
+    # v1.16：近 7 天趋势移到今日概览末尾
+    lines.append(_trend_line(history))
     lines.append("")
     return lines
 
@@ -548,6 +550,11 @@ def _week_html(history: dict | None) -> str:
     复用成员卡片样式渲染（template.py 包裹），不引入新配色。"""
     lines = [line for line in _render_week(history) if line.strip()]
     return markdown_to_html("\n".join(lines))
+
+
+def _trend_html(history: dict | None) -> str:
+    """HTML 版近 7 天趋势（v1.16）：位于概览卡片下方，与 Markdown 同源。"""
+    return markdown_to_html(_trend_line(history))
 
 
 def _highlights_html(members: list[MemberReport]) -> str:

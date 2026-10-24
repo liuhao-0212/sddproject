@@ -346,3 +346,9 @@ CollectResult[T]:
 - 生效方式：`shared.config` 导入时自动调用 `load_dotenv()`，所有入口（main.py / show_report.py）共享
 - 一键运行：`run.bat`（CMD）与 `run.ps1`（PowerShell），内容等价于 `uv run python main.py`
 - 安全：`.env` 已在 `.gitignore`；仓库只提交 `.env.example`（占位值）
+
+### 6.12 展示口径与预览工具（v1.16）
+- 板块顺序：头部 → 本周累计 → 今日概览（含近 7 天趋势）→ 今日亮点 → 仓库动态 → 成员段落 → 落款
+- 「本周累计」= 周一~当日累计 + 较上周对比，不再包含近 7 天趋势
+- 「近 7 天」行位于今日概览末尾（Markdown）；HTML 位于概览卡片下方（template 的 trend_html 区块）
+- show_report.py：复用编排层的采集与生成路径（含 history / repo_events），只写 output/demo-report.*，不推送、不落库
