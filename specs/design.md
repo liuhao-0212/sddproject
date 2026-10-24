@@ -352,3 +352,12 @@ CollectResult[T]:
 - 「本周累计」= 周一~当日累计 + 较上周对比，不再包含近 7 天趋势
 - 「近 7 天」行位于今日概览末尾（Markdown）；HTML 位于概览卡片下方（template 的 trend_html 区块）
 - show_report.py：复用编排层的采集与生成路径（含 history / repo_events），只写 output/demo-report.*，不推送、不落库
+
+### 6.13 周报设计（v1.17）
+- 入口：`python main.py --weekly`（互斥组新增 --weekly）
+- 窗口：本周一 00:00 ~ 现在（本地时区，§6.4）；仓库动态使用同一窗口
+- 数据：GitHub 提交（周窗口）+ daily_stats（本周与上周）+ github_activity 事件
+- 结构：标题 → 本周概览 → 工作分类 → 每日趋势 → 仓库动态 → 成员排名 → 落款
+- 输出：output/weekly-<YYYY-MM-DD>.md/.html；打印 Markdown；不推送、不落库
+- 趋势：周一~今天逐日提交数，缺失按 0；字符 ▁▂▃▄▅▆▇█ + 峰值
+- 排名：按提交次数降序（并列按新增行数），仅列有提交的成员

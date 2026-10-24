@@ -7,6 +7,7 @@
     python main.py --history [--days N]   # 只读：列出最近 N 天日报（v1.7）
     python main.py --show DATE            # 只读：打印指定日期日报 Markdown（v1.7）
     python main.py --export DATE          # 只读：导出指定日期日报到 output/（v1.7）
+    python main.py --weekly               # 生成本周周报到 output/（v1.17）
 
 错误处理（design.md §6.1）:
 - 单个数据源失败不阻断其他数据源；github/lark_task/lark_msg 经 get_last_error()
@@ -37,6 +38,7 @@ import collector.lark_msg as lark_msg
 import collector.lark_task as lark_task
 from collector.lark_attendance import AttendanceRecord
 from generator import DailyReport, MemberReport, generate
+from generator.weekly import generate_weekly
 from generator.formatter import UNASSIGNED_MEMBER_NAME
 from notifier import email as email_notifier
 from notifier import lark_bot as lark_bot_notifier
@@ -65,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--history", action="store_true", help="列出最近 N 天日报（只读，v1.7）")
     group.add_argument("--show", metavar="DATE", help="打印指定日期日报 Markdown（只读，v1.7）")
     group.add_argument("--export", metavar="DATE", help="导出指定日期日报为文件（只读，v1.7）")
+    group.add_argument("--weekly", action="store_true", help="生成本周周报（不推送，v1.17）")
     parser.add_argument("--days", default="30",
                         help="--history 的查询天数（正整数，默认 30）")
     args = parser.parse_args(argv)
@@ -76,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
         return show(args.show)
     if args.export:
         return export(args.export)
+    if args.weekly:
+        return weekly()
     return run(dry_run=args.dry_run)
 
 
@@ -424,6 +429,53 @@ def export(date_str: str) -> int:
         return 1
     print(f"已导出：{md_path.as_posix()}")
     print(f"已导出：{html_path.as_posix()}")
+    return 0
+
+
+def weekly() -> int:
+    """--weekly：生成本周（周一~今天）周报（v1.17，design.md §6.13）。
+
+    只写 output/weekly-<日期>.md/.html 并打印，不推送、不落库。
+    """
+    cfg = load_config()
+    today = date.today()
+    start = today - timedelta(days=today.weekday())
+    since = datetime.combine(start, time.min, tzinfo=LOCAL_TZ)
+    until = datetime.now(LOCAL_TZ)
+
+    commits = github.collect(cfg["collector"]["github"]["repos"], since, until)
+    if github.get_last_error():
+        print(f"本周提交采集失败：{github.get_last_error()}")
+        return 1
+    try:
+        repo_events = github_activity.collect(cfg["collector"]["github"]["repos"],
+                                              since, until)
+    except Exception as exc:  # 单源失败不阻断周报
+        logger.error("仓库动态采集失败，周报将不显示该板块",
+                     extra={"reason": str(exc)}, exc_info=exc)
+        repo_events = []
+
+    members = _aggregate(cfg, commits, [], [], [], {"github": None})
+    try:
+        storage = Storage(_db_path(cfg))
+        last_rows = storage.get_stats_between(start - timedelta(days=7),
+                                              start - timedelta(days=1))
+    except ReportError as exc:
+        logger.error("读取上周统计失败，周报将不显示较上周对比",
+                     extra={"reason": str(exc)}, exc_info=exc)
+        last_rows = []
+
+    report = generate_weekly(members, start, today, last_rows, repo_events,
+                             cfg["team_name"])
+    out_dir = Path("output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md_path = out_dir / f"weekly-{today.isoformat()}.md"
+    html_path = out_dir / f"weekly-{today.isoformat()}.html"
+    md_path.write_text(report.markdown, encoding="utf-8")
+    html_path.write_text(report.html, encoding="utf-8")
+    print(report.markdown)
+    print(f"已写入：{md_path.as_posix()} / {html_path.as_posix()}")
+    logger.info("周报已生成", extra={"start": start.isoformat(), "end": today.isoformat()})
     return 0
 
 

@@ -362,6 +362,19 @@
 - [ ] show_report.py 含历史趋势与仓库动态，且不推送、不落库
 - [ ] 全部测试通过
 
+## Task 27: 周报（v1.17）
+描述: 新增 --weekly，生成本周周报（概览/分类/趋势/仓库动态/成员排名），只写文件不推送
+输入: design.md §6.13、proposal.md §3.20
+输出: generator/weekly.py（新增）、main.py、tests/test_weekly.py
+依赖: Task 26
+
+验收标准:
+- [ ] --weekly 打印并写入 output/weekly-<日期>.md/.html
+- [ ] 五个板块齐全，较上周对比与活跃天数正确
+- [ ] 趋势覆盖周一~今天，缺失按 0
+- [ ] 与其它 CLI 选项互斥
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）
