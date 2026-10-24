@@ -41,6 +41,8 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
                padding: .7rem .4rem; text-align: center; }
   .stat-value { display: block; font-size: 26px; font-weight: 700; color: #2563eb; }
   .stat-label { display: block; font-size: 12px; color: #1f2937; margin-top: 2px; }
+  /* 近 7 天趋势（v1.16）：概览卡片下方的迷你趋势 */
+  .trend ul { list-style: none; padding: 0; margin: .6rem 0 0; text-align: center; font-size: 13px; }
   /* 成员板块：浅色卡片 + 圆角 + 内边距 */
   .member-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px;
                  padding: .9rem 1.2rem; margin: 1rem 0; }
@@ -88,6 +90,9 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
       {% endfor %}
     </tr>
   </table>
+  {% if trend_html %}
+  <div class="trend">{{ trend_html | safe }}</div>
+  {% endif %}
 </section>
 {% endif %}
 {% if highlights_html %}
