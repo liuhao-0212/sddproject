@@ -361,3 +361,11 @@ CollectResult[T]:
 - 输出：output/weekly-<YYYY-MM-DD>.md/.html；打印 Markdown；不推送、不落库
 - 趋势：周一~今天逐日提交数，缺失按 0；字符 ▁▂▃▄▅▆▇█ + 峰值
 - 排名：按提交次数降序（并列按新增行数），仅列有提交的成员
+
+### 6.14 只读 Web 界面（v1.18）
+- 入口：`python main.py --serve [--port 8000]`（或 `python webapp.py --port N`）
+- 绑定：仅 127.0.0.1（本机访问），端口默认 8000，port=0 时由系统分配（测试用）
+- 路由：`/` 首页列表；`/report/<YYYY-MM-DD>` 日报 HTML；`/report/<日期>.md` Markdown；`/weekly/<日期>` 周报 HTML
+- 数据：日报读 reports 表（每日期取最新一条）；周报读 output/weekly-<日期>.html
+- 只读：不写库、不推送；所有日期先做 YYYY-MM-DD 校验，路径不越出 output/
+- 依赖：标准库 http.server + 现有 jinja2/存储层，不新增运行时依赖
