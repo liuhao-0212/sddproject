@@ -4,7 +4,7 @@
   window=(since, until)：采集窗口（本地时区 datetime），用于头部「数据范围 HH:MM-HH:MM」
 - 结构（v1.3，面向非技术读者，design.md §6.5）：
   头部（📊 标题·团队名 / 📅 日期含星期 / 数据范围）
-  → ▎本周概况（v1.6）→ ▎今日概览（汇总数字）→ 各成员段落（▎成员 → ▪板块 → ·条目）→ 落款
+  → ▎今日概览（汇总数字 + 较昨日 + 近 7 天趋势）→ 各成员段落（▎成员 → ▪板块 → ·条目）→ 落款
 - v1.4 展示规则（design.md §6.5 修订）：有数据 → 正常显示；已接入但当天无数据 →
   「今日无记录」（板块保留）；不可用（已接入但失败）→ 板块保留 + 一行可读说明
   （技术错误经 _friendly_reason 映射为固定文案）；未接入（缺凭据/占位值）→ 不渲染
@@ -14,8 +14,9 @@
 - 工时统计：一行展示工时与出勤状态；可用但当天无记录显示「今日无记录」
 - HTML 由 template.render_html 按结构化数据渲染（v1.5）：深色标题条 → 概览卡片组
   → 板块卡片（图标 + 状态徽章）→ 落款；Markdown 输出保持 v1.3/v1.4 结构不变
-- v1.6：新增「本周概况」板块（位于今日概览之前，含较上周对比）；今日概览代码提交行
-  追加「较昨日」对比；history 为 None 时显示「暂无历史数据」，不报错
+- v1.6：今日概览代码提交行追加「较昨日」对比
+- v1.20：移除「本周累计」板块（由独立周报 --weekly 承担）；history 仅提供
+  yesterday（较昨日）与 trend（近 7 天趋势），为 None 时趋势显示「暂无趋势数据」
 - v1.8：提交按 Conventional Commits 归类（generator/classify.py）；概览追加「工作分类」
   行；成员提交板块按类别分组（组内时间升序）；新增「今日亮点」板块（今日概览之后、
   成员段落之前，最多 3 条、无提交不渲染）；generate(...) 签名不变
@@ -157,8 +158,8 @@ def generate(members: list[MemberReport], date: date, team_name: str,
              repo_events: list[RepoEvent] | None = None) -> DailyReport:
     """生成日报（design.md §4.2）。window 为采集窗口 (since, until)，用于头部数据范围。
 
-    history 为历史统计（v1.6，由编排层从 daily_stats 读取组装），用于
-    「本周概况」「较昨日」与近 7 天趋势（v1.12）；None 时显示「暂无历史数据」。
+    history 为历史统计（v1.20，由编排层从 daily_stats 读取组装），用于
+    「较昨日」与近 7 天趋势；None 时趋势显示「暂无趋势数据」。
     repo_events 为仓库动态事件（v1.12）：None 表示未提供（板块不渲染，向后兼容），
     空列表表示已采集但当天无动态（显示「今日无仓库动态」）。
     Markdown 供飞书卡片使用（结构不变）；HTML 由模板按结构化数据渲染（v1.5）。
@@ -191,7 +192,6 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "title_date": report_date.isoformat(),
         "date_text": f"{report_date.isoformat()} {WEEKDAYS[report_date.weekday()]}",
         "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
-        "week_html": _week_html(history),
         "overview_cards": _overview_cards(stats, history),
         "trend_svg": _trend_svg(history),
         "trend_html": _trend_html(history),
@@ -209,7 +209,6 @@ def _build_markdown(members: list[MemberReport], report_date: date, team_name: s
     """v1.3 结构：头部 → 本周概况（v1.6）→ 今日概览 → 今日亮点（v1.8）
     → 仓库动态（v1.12）→ 成员段落 → 落款。"""
     lines = _render_header(team_name, report_date, window)
-    lines += _render_week(history)
     lines += _render_overview(members, history)
     lines += _render_highlights(members)
     if repo_events is not None:  # v1.12：None = 未提供，板块不渲染（向后兼容）
@@ -259,23 +258,6 @@ def _overview_stats(members: list[MemberReport]) -> dict:
         "attended": len(attended),
         "hours": sum(a.work_hours for a in attended),
     }
-
-
-def _render_week(history: dict | None) -> list[str]:
-    """本周累计（v1.16，原「本周概况」；design.md §6.12）：位于今日概览之前，
-    展示本周（周一~当日）提交/变更/活跃天数与较上周对比；
-    history 为 None（无历史数据）时显示「暂无历史数据」，不报错。
-    v1.16：近 7 天趋势移到「今日概览」，本板块只保留累计与对比。"""
-    lines = ["## ▎本周累计", ""]
-    if not history:
-        lines += ["- · 暂无历史数据", ""]
-        return lines
-    week = history["week"]
-    lines.append(f"- · 提交 {week['commits']} 次 ｜ 变更 +{week['additions']} / -{week['deletions']} 行")
-    diff = week["commits"] - history["last_week"]["commits"]
-    lines.append(f"- · 活跃 {week['active_days']} 天 ｜ 📈 较上周：提交 {_signed(diff)} 次")
-    lines.append("")
-    return lines
 
 
 def _trend_line(history: dict | None) -> str:
@@ -544,13 +526,6 @@ def _overview_cards(stats: dict, history: dict | None = None) -> list[dict]:
             diff = stats["commits"] - history["yesterday"]["commits"]
             cards.append({"label": "较昨日提交", "value": f"{_signed(diff)} 次"})
     return cards
-
-
-def _week_html(history: dict | None) -> str:
-    """HTML 版本周概况（v1.6）：与 Markdown 板块同源（_render_week），
-    复用成员卡片样式渲染（template.py 包裹），不引入新配色。"""
-    lines = [line for line in _render_week(history) if line.strip()]
-    return markdown_to_html("\n".join(lines))
 
 
 def _trend_html(history: dict | None) -> str:

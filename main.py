@@ -594,44 +594,24 @@ def _stats_totals(rows: list[dict]) -> dict[str, int]:
 
 
 def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict | None:
-    """v1.6：读取历史统计并组装 history（design.md §6.5）。
+    """v1.20：读取「昨日统计」与「近 7 天趋势」（本周累计已移除，由独立周报承担）。
 
-    本周 = 周一 ~ 当日：周一 ~ 昨日读 daily_stats，当日统计由 members 现算
-    （当日统计在生成后才写入，且避免同日重复运行时重复计数），
-    因此本周必然包含今天（design.md §6.5「周一 ~ 当日」）；
-    上周 = 完整的上一自然周（上周一 ~ 上周日）；昨日单独成行。
-    仅当历史为空且当日无任何数据时返回 None（本周概况显示「暂无历史数据」）；
-    读取失败同样返回 None，不阻断日报流程。
+    仅当历史为空且当日无数据时返回 None；读取失败同样返回 None，不阻断日报流程。
     """
     try:
         storage = Storage(_db_path(cfg))
-        week_start = today - timedelta(days=today.weekday())
-        week_rows = storage.get_stats_between(week_start, today - timedelta(days=1))
-        last_rows = storage.get_stats_between(week_start - timedelta(days=7),
-                                              week_start - timedelta(days=1))
         y_rows = storage.get_stats_between(today - timedelta(days=1),
                                            today - timedelta(days=1))
         # v1.12：近 7 个自然日提交趋势（含今天；缺失日期按 0 补齐）
         trend_rows = storage.get_stats_between(today - timedelta(days=6), today)
     except ReportError as exc:
-        logger.error("读取历史统计失败，本周概况将显示「暂无历史数据」",
+        logger.error("读取历史统计失败，较昨日与趋势将降级",
                      extra={"reason": str(exc)}, exc_info=exc)
         return None
     today_stats = _today_stats(members)
     today_active = bool(today_stats["commits"] or today_stats["messages"])
-    if not (week_rows or last_rows or y_rows or trend_rows) and not today_active:
-        return None  # 历史为空且当日无数据：没有可展示的趋势
-    week = _stats_totals(week_rows)
-    week["commits"] += today_stats["commits"]
-    week["additions"] += today_stats["additions"]
-    week["deletions"] += today_stats["deletions"]
-    if today_active:
-        week["active_days"] += 1
-    week["start"] = week_start
-    week["end"] = today
-    last_week = _stats_totals(last_rows)
-    last_week["start"] = week_start - timedelta(days=7)
-    last_week["end"] = week_start - timedelta(days=1)
+    if not (y_rows or trend_rows) and not today_active:
+        return None
     yesterday = None
     if y_rows:
         yesterday_rows = _stats_totals(y_rows)
@@ -642,8 +622,7 @@ def _load_history(cfg: dict, today: date, members: list[MemberReport]) -> dict |
     trend = _build_trend(trend_rows, today)
     if trend:
         trend[-1]["commits"] = today_stats["commits"]
-    return {"week": week, "last_week": last_week, "yesterday": yesterday,
-            "trend": trend}
+    return {"yesterday": yesterday, "trend": trend}
 
 
 def _build_trend(rows: list[dict], today: date) -> list[dict]:
