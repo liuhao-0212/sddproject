@@ -147,7 +147,7 @@ def build_repo_events(payload, app_dir):
 def build_history(payload, report_date, members):
     """把 fixture 的 trend 装配成生成层 history（v1.12）。
 
-    缺失 trend 时返回 None——本周概况显示「暂无历史数据 / 暂无趋势数据」（原行为）；
+    缺失 trend 时返回 None——今日概览趋势显示「暂无趋势数据」；
     trend 支持 [1, 0, 3, ...] 与 [{"date": "...", "commits": n}] 两种写法。
     """
     raw_trend = payload.get("trend")

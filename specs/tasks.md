@@ -401,6 +401,18 @@
 - [ ] Markdown / 飞书卡片不含 SVG
 - [ ] 全部测试通过
 
+## Task 30: 日报移除本周累计（v1.20）
+描述: 日报删除「本周累计」，由周报承担；保留较昨日与近 7 天趋势
+输入: design.md §6.16、proposal.md §3.23
+输出: generator/formatter.py、generator/template.py、main.py、tests
+依赖: Task 29
+
+验收标准:
+- [ ] 日报 Markdown/HTML 均无「本周累计」
+- [ ] 今日概览保留「较昨日」与「近 7 天趋势」
+- [ ] 周报功能不受影响
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）

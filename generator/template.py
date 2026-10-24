@@ -75,11 +75,6 @@ _PAGE_TEMPLATE = Environment().from_string("""<!DOCTYPE html>
   <h1>📊 {{ team_name }} {{ report_name }}</h1>
   <p class="report-meta">📅 {{ date_text }}{% if range_text %} · 数据范围 {{ range_text }}{% endif %}</p>
 </header>
-{% if week_html %}
-<section class="card member-card">
-  {{ week_html | safe }}
-</section>
-{% endif %}
 {% if overview_cards %}
 <section class="overview">
   <table class="stat-row" role="presentation" cellpadding="0" cellspacing="0">
