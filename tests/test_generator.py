@@ -1084,6 +1084,22 @@ def test_trend_line_moved_to_overview():
     assert 'class="trend"' in report.html
 
 
+def test_html_trend_svg_renders_seven_bars():
+    """v1.19：HTML 概览含 7 根 SVG 柱子与星期标签；Markdown 不含 SVG。"""
+    history = _history_with_trend([1, 0, 3, 2, 0, 4, 2])
+    report = generate([make_member()], REPORT_DATE, "研发一组", history=history)
+
+    assert "<svg" in report.html
+    assert report.html.count("<rect") == 7
+    assert 'aria-label="近 7 天提交趋势"' in report.html
+    assert "<svg" not in report.markdown
+
+
+def test_html_trend_svg_hidden_without_trend():
+    html = generate([make_member()], REPORT_DATE, "研发一组").html
+    assert "<svg" not in html
+
+
 def test_trend_line_all_zero_uses_lowest_bar():
     history = _history_with_trend([0, 0, 0, 0, 0, 0, 0])
     markdown = generate([make_member()], REPORT_DATE, "研发一组",

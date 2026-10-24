@@ -388,6 +388,19 @@
 - [ ] 仅绑定 127.0.0.1，不写库、不推送
 - [ ] 全部测试通过
 
+## Task 29: HTML 趋势图（v1.19）
+描述: HTML 日报概览内用内联 SVG 展示近 7 天提交柱状图，保留文字降级
+输入: design.md §6.15、proposal.md §3.22
+输出: generator/formatter.py、generator/template.py、tests
+依赖: Task 28
+
+验收标准:
+- [ ] HTML 含 7 根 SVG 柱子、数值与星期标签
+- [ ] 峰值高亮；全 0 有最低柱
+- [ ] 无趋势不渲染 SVG
+- [ ] Markdown / 飞书卡片不含 SVG
+- [ ] 全部测试通过
+
 ## 执行顺序
 阶段 1: Task 1（项目初始化）
 阶段 2: Task 2（共享基础层）
