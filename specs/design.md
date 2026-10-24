@@ -369,3 +369,10 @@ CollectResult[T]:
 - 数据：日报读 reports 表（每日期取最新一条）；周报读 output/weekly-<日期>.html
 - 只读：不写库、不推送；所有日期先做 YYYY-MM-DD 校验，路径不越出 output/
 - 依赖：标准库 http.server + 现有 jinja2/存储层，不新增运行时依赖
+
+### 6.15 HTML 趋势图（v1.19）
+- 位置：HTML 日报概览卡片下方（template 的 trend 区块）
+- 形式：内联 SVG（viewBox 560x130，7 根柱子），峰值柱用深色 #1d4ed8，其余 #2563eb
+- 标注：柱顶数值 + 底部星期标签；aria-label="近 7 天提交趋势"
+- 降级：SVG 下方保留字符趋势文字（v1.16 的 trend_html），无趋势数据时只显示「暂无趋势数据」
+- 兼容：不依赖外部图片/JS；Markdown 与飞书卡片不包含 SVG

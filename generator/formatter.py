@@ -193,6 +193,7 @@ def _html_structure(members: list[MemberReport], report_date: date, team_name: s
         "range_text": f"{_local(window[0]):%H:%M}-{_local(window[1]):%H:%M}" if window else "",
         "week_html": _week_html(history),
         "overview_cards": _overview_cards(stats, history),
+        "trend_svg": _trend_svg(history),
         "trend_html": _trend_html(history),
         "highlights_html": _highlights_html(members),
         "repo_html": _repo_events_html(repo_events),
@@ -553,8 +554,52 @@ def _week_html(history: dict | None) -> str:
 
 
 def _trend_html(history: dict | None) -> str:
-    """HTML 版近 7 天趋势（v1.16）：位于概览卡片下方，与 Markdown 同源。"""
+    """HTML 版近 7 天趋势文字（v1.16）：SVG 下方的降级文案。"""
     return markdown_to_html(_trend_line(history))
+
+
+def _trend_svg(history: dict | None) -> str:
+    """内联 SVG 柱状图（v1.19）：近 7 天提交趋势；无趋势数据时返回空串。
+
+    不依赖外部图片/JS，邮件客户端不支持 SVG 时由下方文字趋势降级。
+    """
+    trend = (history or {}).get("trend") or []
+    if not trend:
+        return ""
+    values = [int(item.get("commits", 0)) for item in trend]
+    labels: list[str] = []
+    for item in trend:
+        try:
+            labels.append(WEEKDAYS[date.fromisoformat(str(item.get("date"))).weekday()])
+        except (TypeError, ValueError):
+            labels.append("")
+    peak = max(values) if values else 0
+    width, height = 560, 130
+    left, right, top, bottom = 24, 16, 24, 28
+    chart_h = height - top - bottom
+    slot = (width - left - right) / max(1, len(values))
+    bar_w = min(44.0, slot * 0.55)
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+        'role="img" aria-label="近 7 天提交趋势" xmlns="http://www.w3.org/2000/svg">',
+        f'<line x1="{left}" y1="{height - bottom}" x2="{width - right}" '
+        f'y2="{height - bottom}" stroke="#e5e7eb" stroke-width="1"/>',
+    ]
+    for index, (value, label) in enumerate(zip(values, labels)):
+        x_center = left + slot * index + slot / 2
+        bar_h = 0.0 if peak <= 0 else chart_h * value / peak
+        bar_h = max(bar_h, 2.0 if value > 0 else 1.0)
+        x = x_center - bar_w / 2
+        y = height - bottom - bar_h
+        fill = "#1d4ed8" if value == peak and peak > 0 else "#2563eb"
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" '
+                     f'height="{bar_h:.1f}" rx="3" fill="{fill}"/>')
+        parts.append(f'<text x="{x_center:.1f}" y="{y - 6:.1f}" text-anchor="middle" '
+                     f'font-size="11" fill="#374151">{value}</text>')
+        parts.append(f'<text x="{x_center:.1f}" y="{height - 8:.1f}" text-anchor="middle" '
+                     f'font-size="11" fill="#6b7280">{label}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def _highlights_html(members: list[MemberReport]) -> str:
